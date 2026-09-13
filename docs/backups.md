@@ -6,6 +6,10 @@ Start mit täglicher Sicherung:
 ./start-all --backups
 # Mit Compose-Proxy:
 ./start-all docker-proxy --backups
+# SSH-unabhängig im Hintergrund:
+./start-all -d --backups
+# Hintergrundbetrieb inklusive Abschlussbackup beenden:
+./start-all --stop
 ```
 
 Backups werden täglich um 00:00 Uhr in `APP_TIMEZONE` (Standard `Europe/Berlin`)
@@ -17,6 +21,13 @@ eine Warnung ausgegeben und mit Fehlerstatus heruntergefahren.
 `./start-all` ohne Schalter erstellt keine Backups und startet keinen Backup-Timer.
 Die Einstellung wird nicht gespeichert. Ohne laufenden Worker findet auch keine
 periodische Backupbereinigung statt; beim nächsten Start mit `--backups` und bei jedem Backup wird wieder bereinigt.
+
+Mit `-d` übernimmt eine vom Terminal getrennte Hintergrundsteuerung den Worker und
+das Abschlussbackup. Eine geschlossene SSH-Verbindung oder das Beenden von
+`docker compose logs -f` stoppt diesen Betrieb nicht. Zum geordneten Beenden immer
+`./start-all --stop` verwenden. Vor einem Start ohne Backups den bestehenden Betrieb
+stoppen; parallele start-all-Starts werden abgewiesen. Nach einem Serverneustart muss
+die Backupsteuerung erneut mit `./start-all -d --backups` gestartet werden.
 
 `backups/` und `.local-state/` sind von Git und Docker-Builds ausgeschlossen.
 Backups erhalten AES-256-GCM-Verschlüsselung mit Integritätsprüfung. Der zufällige

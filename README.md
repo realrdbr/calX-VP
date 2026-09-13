@@ -378,7 +378,63 @@ Docker verwendet den nativen `journald`-Treiber. `docker logs` und `docker compo
 
 Details zu Einrichtung, Grenzen und noch zu konfigurierenden Backupfristen: [Datenschutz im Betrieb](docs/datenschutz-betrieb.md).
 
-Backups sind nur mit `./start-all --backups` aktiv (täglich um 00:00 Uhr in `APP_TIMEZONE` und beim regulären Beenden).
+### Startskript: Modi und Optionen
+
+`./start-all` und `./start-all.sh` akzeptieren dieselben Optionen:
+
+```sh
+./start-all [docker|docker-proxy|local] [-d] [--backups] [--restore DATEI]
+./start-all --stop
+```
+
+| Option / Modus | Wirkung |
+| --- | --- |
+| `docker` | Standard: Docker-Dienste ohne mitgelieferten Caddy-Proxy starten. Auch für nginx auf dem Host. |
+| `docker-proxy` | Docker-Dienste einschließlich Caddy starten. |
+| `local` | Python und Node für die lokale Entwicklung starten; unterstützt weder `-d` noch Backups/Wiederherstellung. |
+| `-d`, `--detach` | Startmeldungen und die letzten 100 Logzeilen je Dienst anzeigen, dann das Terminal freigeben. Dienste und optionale Backups laufen unabhängig von der SSH-Verbindung weiter. |
+| `--backups` | Backups um 00:00 Uhr in `APP_TIMEZONE` und ein Abschlussbackup beim geordneten Stoppen aktivieren. Mit `-d` kombinierbar. |
+| `--restore DATEI` | Verschlüsselte Sicherung nach interaktiver Bestätigung und Sicherheitsbackup wiederherstellen, anschließend starten. Auch mit `-d` bleibt die Bestätigung im Terminal. |
+| `--stop` | Den mit `-d` gestarteten Betrieb beenden: Backup-Worker stoppen, gegebenenfalls Abschlussbackup erstellen, dann Docker-Dienste herunterfahren. Ohne weitere Optionen verwenden. |
+| `-h`, `--help` | Kurze Hilfe anzeigen. |
+
+Für einen Server mit nginx und SSH beispielsweise:
+
+```sh
+./start-all -d --backups
+# Später, auch nach erneuter SSH-Anmeldung, im Projektverzeichnis:
+docker compose logs -f --tail=100
+# Nur einzelne Dienste:
+docker compose logs -f --tail=100 app vp
+# Geordnet beenden:
+./start-all --stop
+```
+
+Ein erneutes Attach ist nicht nötig. `docker compose logs -f` zeigt neue Logs live;
+Strg+C beendet dabei nur die Loganzeige. Für den Caddy-Modus kann
+`docker compose --profile proxy logs -f --tail=100` verwendet werden.
+Ohne `-d` bleibt das bisherige Verhalten bestehen: Das Skript folgt den Logs und
+fährt beim Beenden die Dienste herunter.
+
+Ein laufender start-all-Betrieb sperrt weitere Starts im selben Projektverzeichnis.
+Vor einem Update oder Wechsel der Backupoption zunächst `./start-all --stop`
+ausführen (im Vordergrund stattdessen Strg+C), danach mit den gewünschten Optionen
+neu starten. Direktes `docker compose down` umgeht die Hintergrundsteuerung und
+deren Abschlussbackup; dafür `--stop` verwenden.
+
+Die Hintergrundsteuerung benötigt kein zusätzliches Netzwerkport und läuft unter
+dem aufrufenden Benutzer. Ihr lokaler Steuersocket, die Startsperre und ihr Log
+liegen im bereits ignorierten, privaten Verzeichnis `.local-state/`.
+Diagnose von Backup-/Stoppfehlern: `tail -n 100 .local-state/start-all.log`.
+Das Log wird beim nächsten Hintergrundstart ersetzt; Containerlogs bleiben über
+Docker mit der eingerichteten Journalaufbewahrung verfügbar.
+`-d` übersteht den SSH-Verbindungsabbruch, richtet aber keinen automatischen Start
+der Backupsteuerung nach einem Serverneustart ein. Nach einem Neustart erneut mit
+den gewünschten Optionen starten. Bei `kill -9`, Stromausfall oder einer Hostregel,
+die beim Abmelden sämtliche Benutzerprozesse beendet, kann die Hintergrundsteuerung
+kein geordnetes Abschlussbackup garantieren.
+
+Backups sind nur mit `./start-all --backups` beziehungsweise `./start-all -d --backups` aktiv (täglich um 00:00 Uhr in `APP_TIMEZONE` und beim regulären Beenden).
 `./start-all --restore backups/JJJJ-MM-TT/DATEI.tar.gz.enc` stellt eine Sicherung nach Bestätigung
 wieder her. Ohne `--backups` läuft kein Backup-Worker. Details und Schlüsselaufbewahrung:
 [Backups und Wiederherstellung](docs/backups.md).
