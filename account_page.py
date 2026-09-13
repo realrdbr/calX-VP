@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import os
 from html import escape
 from urllib.parse import quote
 
 from accounts import CalendarEventTypeOption, NotifySettings, User
 from subscriptions import SubjectOption
-from web_utils import CALENDAR_PUBLIC_URL, COMMON_CSS, render_theme_script, render_vp_navigation, render_vp_user_identity
+from web_utils import CALENDAR_PUBLIC_URL, COMMON_CSS, render_legal_links, render_theme_script, render_vp_navigation, render_vp_user_identity
 
 
 def _layout(title: str, body: str) -> str:
@@ -148,12 +149,6 @@ button:not(.theme-toggle) {{ min-height:38px; border:1px solid var(--primary); b
 .calendar-login-footer {{ width:100%; padding:16px 24px; border-top:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; color:var(--muted); font-size:.8rem; font-weight:650; }}
 .calendar-login-footer a {{ color:var(--text); text-decoration:none; }}
 .calendar-login-footer button {{ min-height:0; padding:0; border:0; background:transparent; color:var(--text); font:inherit; font-weight:700; cursor:pointer; }}
-.login-info {{ position:fixed; inset:0; z-index:5; display:none; place-items:center; padding:16px; background:rgba(15,23,42,.55); }}
-.login-info:target {{ display:grid; }}
-.login-info-card {{ width:min(440px, 100%); padding:20px; border:1px solid var(--border); border-radius:10px; background:var(--surface); color:var(--text); box-shadow:0 12px 30px rgba(15,23,42,.2); }}
-.login-info-card h2 {{ margin:0 0 12px; }}
-.login-info-card p {{ margin:0 0 10px; color:var(--muted); line-height:1.5; }}
-.login-info-close {{ display:inline-flex; margin-top:8px; padding:8px 12px !important; border-radius:7px !important; background:var(--primary) !important; color:white !important; }}
 </style></head><body><main{main_class}>{body}</main>{render_theme_script()}</body></html>"""
 
 
@@ -179,10 +174,9 @@ def render_login(error: str | None = None, *, username: str = "", pin_step: bool
             <button type="submit">Weiter <span aria-hidden="true">→</span></button></div>
         </form>
         """
-    info = """<div id="login-info" class="login-info"><div class="login-info-card"><h2>Info</h2><p>Diese Webseite hat keine offizielle Verbindung mit dem Gymnasium Olbernhau und wurde privat von Schülern erstellt.</p><p>Der Zugriff ist für Schüler:innen der 11. Klasse des Gymnasiums Olbernhau sowie in Ausnahmefällen für weitere autorisierte Schüler:innen vorgesehen.</p><p>Bei Fragen oder Problemen erreichst du uns unter support@cal11.de.</p><a class="login-info-close" href="#">Schließen</a></div></div>"""
     return _layout("Vertretungsplan", f"""
     <div class="calendar-login"><section class="calendar-login-shell"><header class="calendar-login-header"><picture><source media="(prefers-color-scheme: dark)" srcset="/icons/logo_dark.webp"><img class="login-product-logo" src="/icons/logo_white.webp" alt="cal11"></picture><h1>Vertretungsplan</h1></header>
-    {notice}{form}<a class="login-switch" href="{escape(CALENDAR_PUBLIC_URL)}">Zum Kalender</a></section><footer class="calendar-login-footer"><a href="#login-info">Info</a><a href="{escape(CALENDAR_PUBLIC_URL)}">cal11.de</a></footer></div>{info}""")
+    {notice}{form}<a class="login-switch" href="{escape(CALENDAR_PUBLIC_URL)}">Zum Kalender</a></section><footer class="calendar-login-footer" data-legal-footer>{render_legal_links()}<a href="{escape(CALENDAR_PUBLIC_URL)}">cal11.de</a></footer></div>""")
 
 
 def _choice_checkbox(name: str, value: str, label: str, *, checked: bool) -> str:

@@ -1,3 +1,4 @@
+import LegalLinks from './LegalLinks';
 import { useState, useEffect, useMemo, useRef, MouseEvent, TouchEvent } from 'react';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, addMonths, subMonths, addWeeks, subWeeks, startOfWeek, endOfWeek, isSameMonth, getISOWeek } from 'date-fns';
 import { de } from 'date-fns/locale';
@@ -566,7 +567,10 @@ export default function CalendarView({ user, onUpdatePreferences, isInitialSetup
             )}
           </div>
           
-          <div className={`mt-auto pt-3 flex flex-col items-stretch border-t ${theme.border} gap-1`}>
+          <section aria-label="Informationen" className={`mt-auto pt-4 pb-4 border-t border-b ${theme.border} ${theme.textMuted}`}>
+            <LegalLinks themeMode={isDark ? 'dark' : 'light'} className="!flex-col !items-stretch !gap-1" />
+          </section>
+          <div className="pt-4 flex flex-col items-stretch gap-2">
             <a
               href={VERTRETUNGSPLAN_URL}
               className="text-sm font-semibold hover:opacity-80 transition-opacity"

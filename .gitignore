@@ -22,3 +22,9 @@ __pycache__/
 data/*
 !data/.gitkeep
 uploads/
+
+# Lokale Journal-Einrichtungsmarkierung (hostabhängig, nicht versionieren)
+.local-state/
+
+# Lokale verschlüsselte Sicherungen
+/backups/

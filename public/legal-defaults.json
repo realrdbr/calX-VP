@@ -1,0 +1,9 @@
+{
+  "SUPPORT_MAIL": "support@cal11.de",
+  "PRIVACY_CONTROLLER": "Vom Betreiber noch zu ergänzen",
+  "PRIVACY_PROCESSORS": "Vom Betreiber anhand der eingesetzten Hosting-, Proxy- und Push-Dienste zu ergänzen",
+  "PRIVACY_RETENTION": "Die Containerlogs liegen im Systemjournal. Dessen tatsächliche Host-Aufbewahrungsfrist sowie separate nginx- und Backupfristen sind vom Betreiber anzugeben. Datenbank-Anmeldeprotokolle werden nach 30 Tagen stündlich bereinigt.",
+  "PRIVACY_ADDRESS": "Vom Betreiber noch zu ergänzen",
+  "PRIVACY_TOOLS": "Die eingesetzte Software und ihre Verarbeitung sind vom Betreiber zu ergänzen",
+  "PRIVACY_AUTHORITY": "Die für den Sitz des Verantwortlichen zuständige Datenschutzaufsichtsbehörde; Beschwerden sind auch bei der Aufsichtsbehörde deines gewöhnlichen Aufenthaltsorts möglich"
+}

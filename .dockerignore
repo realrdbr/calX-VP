@@ -12,3 +12,8 @@ uploads
 __pycache__
 .env.*
 !.env.example
+
+.local-state/
+
+# Lokale verschlüsselte Sicherungen
+/backups/

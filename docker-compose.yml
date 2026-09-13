@@ -1,5 +1,12 @@
+# journald retains docker logs support; configure the host with ops/configure_journal.py.
+x-retained-logging: &retained-logging
+  driver: journald
+  options:
+    tag: "{{.Name}}"
+
 services:
   mariadb:
+    logging: *retained-logging
     image: mariadb:11.4
     container_name: ${MARIADB_CONTAINER_NAME:-mariadb}
     restart: unless-stopped
@@ -17,6 +24,7 @@ services:
       - cal11_net
 
   app:
+    logging: *retained-logging
     build:
       context: .
       dockerfile: Dockerfile
@@ -39,6 +47,13 @@ services:
       DB_USER: ${DB_USER:-cal11user}
       DB_PASSWORD: ${DB_PASSWORD:-geheimes_passwort_hier_eintragen}
       DB_NAME: ${DB_NAME:-cal11}
+      SUPPORT_MAIL: ${SUPPORT_MAIL:-support@cal11.de}
+      PRIVACY_CONTROLLER: ${PRIVACY_CONTROLLER:-}
+      PRIVACY_ADDRESS: ${PRIVACY_ADDRESS:-}
+      PRIVACY_AUTHORITY: ${PRIVACY_AUTHORITY:-}
+      PRIVACY_PROCESSORS: ${PRIVACY_PROCESSORS:-}
+      PRIVACY_TOOLS: ${PRIVACY_TOOLS:-}
+      PRIVACY_RETENTION: ${PRIVACY_RETENTION:-}
       CALENDAR_PUBLIC_URL: ${CALENDAR_PUBLIC_URL:-http://127.0.0.1:3000}
       VERTRETUNGSPLAN_PUBLIC_URL: ${VERTRETUNGSPLAN_PUBLIC_URL:-http://127.0.0.1:8000}
       VITE_VERTRETUNGSPLAN_URL: ${VERTRETUNGSPLAN_PUBLIC_URL:-http://127.0.0.1:8000}
@@ -59,11 +74,7 @@ services:
       - cal11_net
 
   ntfy:
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
+    logging: *retained-logging
     image: binwiederhier/ntfy:v2.25.0
     container_name: ${NTFY_CONTAINER_NAME:-vpmobil-ntfy}
     healthcheck:
@@ -100,11 +111,7 @@ services:
           - ntfy-delivery
 
   ntfy-provisioner:
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
+    logging: *retained-logging
     build:
       context: .
       dockerfile: Dockerfile.ntfy-provisioner
@@ -128,11 +135,7 @@ services:
       - cal11_net
 
   vp:
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
+    logging: *retained-logging
     build:
       context: .
       dockerfile: Dockerfile.vp
@@ -173,6 +176,13 @@ services:
       NTFY_PROVISIONER_SECRET: ${APP_ENCRYPTION_KEY:?APP_ENCRYPTION_KEY muss gesetzt sein}
       NTFY_CACHE_FILE: /var/lib/ntfy/cache.db
       ADMIN_PANEL_PASSWORD: ${ADMIN_PANEL_PASSWORD:?ADMIN_PANEL_PASSWORD muss gesetzt sein}
+      SUPPORT_MAIL: ${SUPPORT_MAIL:-support@cal11.de}
+      PRIVACY_CONTROLLER: ${PRIVACY_CONTROLLER:-}
+      PRIVACY_ADDRESS: ${PRIVACY_ADDRESS:-}
+      PRIVACY_AUTHORITY: ${PRIVACY_AUTHORITY:-}
+      PRIVACY_PROCESSORS: ${PRIVACY_PROCESSORS:-}
+      PRIVACY_TOOLS: ${PRIVACY_TOOLS:-}
+      PRIVACY_RETENTION: ${PRIVACY_RETENTION:-}
       CALENDAR_PUBLIC_URL: ${CALENDAR_PUBLIC_URL:-http://127.0.0.1:3000}
       VERTRETUNGSPLAN_PUBLIC_URL: ${VERTRETUNGSPLAN_PUBLIC_URL:-http://127.0.0.1:8000}
       SCHULNUMMER: ${SCHULNUMMER}
@@ -194,6 +204,7 @@ services:
         ipv4_address: ${NTFY_DELIVERY_VP_IP:-172.30.251.3}
 
   proxy:
+    logging: *retained-logging
     image: caddy:2.8
     container_name: ${PROXY_CONTAINER_NAME:-cal11_proxy}
     restart: unless-stopped
@@ -202,8 +213,10 @@ services:
     profiles:
       - proxy
     depends_on:
-      - app
-      - vp
+      app:
+        condition: service_started
+      vp:
+        condition: service_started
     ports:
       - "80:80"
       - "443:443"

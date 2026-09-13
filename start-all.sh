@@ -2,7 +2,24 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MODE="${1:-docker}"
+MODE="docker"
+BACKUPS=0
+RESTORE=""
+while (( $# )); do
+  case "$1" in
+    docker|docker-proxy|local) MODE="$1" ;;
+    --backups) BACKUPS=1 ;;
+    --restore)
+      if (( $# < 2 )); then echo "--restore benötigt eine Backupdatei."; exit 1; fi
+      RESTORE="$2"; shift ;;
+    *) echo "Nutzung: ./start-all [docker|docker-proxy|local] [--backups] [--restore DATEI]"; exit 1 ;;
+  esac
+  shift
+done
+if [[ "$MODE" == local ]] && (( BACKUPS || ${#RESTORE} )); then
+  echo "Backups und Wiederherstellung benötigen den Docker-Modus."; exit 1
+fi
+BACKUP_PID=""
 CHILD_PID=""
 SHUTTING_DOWN=0
 STARTUP_COMPLETE=0
@@ -17,6 +34,10 @@ shutdown() {
   SHUTTING_DOWN=1
   trap - INT TERM EXIT
   echo
+  if [[ -n "$BACKUP_PID" ]]; then
+    kill -TERM -- "-$BACKUP_PID" 2>/dev/null || kill -TERM "$BACKUP_PID" 2>/dev/null || true
+    wait "$BACKUP_PID" 2>/dev/null || true
+  fi
   if (( exit_code != 0 && STARTUP_COMPLETE == 0 )) && [[ "$MODE" == docker || "$MODE" == docker-proxy ]]; then
     echo "[start-all] Start fehlgeschlagen (Exit $exit_code). Container bleiben für die Diagnose erhalten."
     docker compose ps -a || true
@@ -29,6 +50,13 @@ shutdown() {
     fi
     echo "[start-all] Nach Behebung erneut starten. Manuell beenden: docker compose down"
     exit "$exit_code"
+  fi
+  if (( BACKUPS && STARTUP_COMPLETE )); then
+    echo "[start-all] Erstelle Abschlussbackup vor dem Herunterfahren..."
+    if ! python3 "$ROOT_DIR/ops/backup.py"; then
+      echo "[start-all] WARNUNG: Abschlussbackup fehlgeschlagen. Vorhandene Sicherungen bleiben erhalten." >&2
+      exit_code=1
+    fi
   fi
   echo "[start-all] Fahre alle Dienste herunter..."
 
@@ -49,6 +77,15 @@ shutdown() {
   echo "[start-all] Alle Dienste wurden beendet."
   exit "$exit_code"
 }
+
+# Configure retention before touching containers or installing shutdown traps.
+if [[ "$MODE" == docker || "$MODE" == docker-proxy ]]; then
+  python3 "$ROOT_DIR/ops/configure_journal.py" --ensure --env-file "$ROOT_DIR/.env"
+fi
+
+if [[ -n "$RESTORE" ]]; then
+  python3 "$ROOT_DIR/ops/restore.py" "$RESTORE"
+fi
 
 trap shutdown INT TERM EXIT
 
@@ -76,6 +113,10 @@ case "$MODE" in
     preserve_uploads
     docker compose up -d --build
     bash ./sync-ntfy-users.sh
+    if (( BACKUPS )); then
+      setsid python3 "$ROOT_DIR/ops/backup.py" --loop &
+      BACKUP_PID=$!
+    fi
     STARTUP_COMPLETE=1
     docker compose logs -f
     ;;
@@ -85,6 +126,10 @@ case "$MODE" in
     preserve_uploads
     docker compose --profile proxy up -d --build
     bash ./sync-ntfy-users.sh
+    if (( BACKUPS )); then
+      setsid python3 "$ROOT_DIR/ops/backup.py" --loop &
+      BACKUP_PID=$!
+    fi
     STARTUP_COMPLETE=1
     docker compose --profile proxy logs -f
     ;;

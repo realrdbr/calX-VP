@@ -369,3 +369,16 @@ demselben Host erreicht sie über `127.0.0.1`. Die Anmeldung, Schlüssel und
 persönlichen ntfy-Zugangsdaten werden durch diese Änderung nicht ersetzt.
 Öffentliche Health-/Login-Prüfungen beweisen keine interne Produktionsroute
 und keine Push-Anzeige auf einem bestimmten Endgerät.
+
+### Datenschutz, Impressum und Logaufbewahrung
+
+Die öffentlichen Seiten `/datenschutz` und `/impressum` sowie das gemeinsame Info-Popup sind auch vor der Anmeldung erreichbar. Name, Anschrift, Hostingangaben und Supportadresse werden aus `PRIVACY_CONTROLLER`, `PRIVACY_ADDRESS`, `PRIVACY_PROCESSORS`, `PRIVACY_TOOLS`, `PRIVACY_RETENTION` und `SUPPORT_MAIL` in der lokalen `.env` gelesen. Persönliche Angaben nicht in die `.env.example` übernehmen.
+
+Docker verwendet den nativen `journald`-Treiber. `docker logs` und `docker compose logs` bleiben verfügbar; ein zusätzlicher Port oder eine nginx-Änderung ist nicht erforderlich. Die zeitliche Aufbewahrung wird einmal auf dem Linux-Server mit `sudo python3 ops/configure_journal.py --install` eingerichtet (aus `LOG_RETENTION_DAYS` in `.env`, Standard 7 Tage). Diese Frist gilt für das gesamte Systemjournal. Separate nginx-Dateilogs bleiben bei ihrer bisherigen Hostrotation. Datenbank-Anmeldeprotokolle werden weiterhin stündlich nach 30 Tagen gelöscht.
+
+Details zu Einrichtung, Grenzen und noch zu konfigurierenden Backupfristen: [Datenschutz im Betrieb](docs/datenschutz-betrieb.md).
+
+Backups sind nur mit `./start-all --backups` aktiv (täglich um 00:00 Uhr in `APP_TIMEZONE` und beim regulären Beenden).
+`./start-all --restore backups/JJJJ-MM-TT/DATEI.tar.gz.enc` stellt eine Sicherung nach Bestätigung
+wieder her. Ohne `--backups` läuft kein Backup-Worker. Details und Schlüsselaufbewahrung:
+[Backups und Wiederherstellung](docs/backups.md).

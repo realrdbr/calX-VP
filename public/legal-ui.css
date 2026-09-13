@@ -1,0 +1,36 @@
+/* Shared controls and Info popup; legal document pages keep their own layout. */
+.legal-links { display:flex; flex-wrap:wrap; align-items:center; gap:6px 16px; }
+.legal-links .legal-link { display:inline-flex; align-items:center; gap:8px; min-height:32px; padding:4px 0; border:0; border-radius:4px; background:transparent; color:inherit; font:inherit; font-size:13px; font-weight:650; line-height:1.4; text-align:left; text-decoration:none; cursor:pointer; transition:color .15s; }
+.legal-links .legal-link:hover { background:transparent; color:var(--legal-accent, #e91e63); }
+.legal-links .legal-link:focus-visible { outline:2px solid var(--legal-accent, #e91e63); outline-offset:4px; }
+.legal-footer { border-top:1px solid var(--border, #cbd5e1); padding:16px 24px; color:var(--muted, #64748b); }
+.legal-footer .legal-links { justify-content:center; }
+.info-dialog, .required-pin-page { --info-surface:#fff; --info-bg:#f8fafc; --info-text:#0f172a; --info-muted:#475569; --info-border:#cbd5e1; color-scheme:light; }
+@media (prefers-color-scheme:dark) {
+  .info-dialog:not([data-ui-theme="light"]), .required-pin-page:not([data-ui-theme="light"]) { --info-surface:#1e1e1e; --info-bg:#121212; --info-text:#eee; --info-muted:#cbd5e1; --info-border:#444; color-scheme:dark; }
+}
+.info-dialog[data-ui-theme="dark"], .required-pin-page[data-ui-theme="dark"], html[data-theme="dark"] .info-dialog { --info-surface:#1e1e1e; --info-bg:#121212; --info-text:#eee; --info-muted:#cbd5e1; --info-border:#444; color-scheme:dark; }
+html[data-theme="light"] .info-dialog { --info-surface:#fff; --info-bg:#f8fafc; --info-text:#0f172a; --info-muted:#475569; --info-border:#cbd5e1; color-scheme:light; }
+.info-dialog { position:fixed; inset:0; margin:auto; width:min(448px, calc(100vw - 32px)); max-height:calc(100dvh - 32px); padding:20px; border:1px solid var(--info-border); border-radius:10px; background:var(--info-surface); color:var(--info-text); box-shadow:0 20px 50px #0004; overflow:auto; }
+.info-dialog::backdrop { background:#0008; }
+.info-dialog .info-head { display:flex; align-items:center; justify-content:space-between; gap:16px; padding-bottom:12px; border-bottom:1px solid var(--info-border); }
+.info-dialog h2 { margin:0; font-size:20px; font-weight:800; }
+.info-dialog .info-close { border:0; background:transparent; color:var(--info-muted); font:inherit; width:32px; min-height:32px; padding:4px; cursor:pointer; }
+.info-dialog .info-content { color:var(--info-muted); font-size:14px; line-height:1.65; }
+.info-dialog .info-content p { margin:14px 0; }
+.info-dialog .info-content a { color:inherit; text-decoration:underline; text-underline-offset:3px; }
+.info-dialog .info-submit { width:100%; min-height:40px; margin-top:16px; padding:10px 16px; background:var(--legal-accent,#e91e63); color:white; border:0; border-radius:6px; font:inherit; font-size:14px; font-weight:700; cursor:pointer; }
+.info-dialog button:focus-visible { outline:2px solid var(--legal-accent,#e91e63); outline-offset:3px; }
+.required-pin-page { height:100%; overflow:auto; display:flex; align-items:center; justify-content:center; padding:24px; background:var(--info-bg); color:var(--info-text); }
+.required-pin-card { width:100%; max-width:448px; padding:24px; border:1px solid var(--info-border); border-radius:10px; background:var(--info-surface); }
+.required-pin-card h1 { margin:0; font-size:22px; font-weight:800; }
+.required-pin-card p { margin:16px 0; line-height:1.6; color:var(--info-muted); }
+.required-pin-card label { display:block; margin:16px 0; font-size:14px; font-weight:650; }
+.required-pin-card input { display:block; width:100%; margin-top:6px; padding:10px 12px; border:1px solid var(--info-border); background:var(--info-bg); color:var(--info-text); border-radius:6px; letter-spacing:.4em; text-align:center; font-size:20px; }
+.required-pin-card .pin-save { width:100%; padding:12px; background:var(--legal-accent,#e91e63); color:white; border:0; border-radius:6px; font-weight:700; cursor:pointer; }
+.required-pin-card .pin-save:disabled { opacity:.6; cursor:wait; }
+.required-pin-card .pin-error { color:#e65176; }
+.required-pin-card .legal-links { margin-top:20px; padding-top:12px; border-top:1px solid var(--info-border); color:var(--info-muted); }
+@media (max-height:620px) { .required-pin-page { align-items:flex-start; } }
+
+.info-dialog .info-close:hover { background:var(--info-bg); color:var(--info-text); }

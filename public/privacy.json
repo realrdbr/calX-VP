@@ -1,0 +1,58 @@
+[
+  [
+    "Verantwortlicher und Kontakt",
+    "Verantwortlich: {PRIVACY_CONTROLLER}. Anschrift: {PRIVACY_ADDRESS}. Datenschutzanfragen und Support: {SUPPORT_MAIL}."
+  ],
+  [
+    "Zwecke und Rechtsgrundlagen",
+    "Der private Dienst stellt Kalender und Vertretungspläne für autorisierte Nutzer bereit. Konten, Kurszuordnung, Sitzungen und gewählte Benachrichtigungen dienen der Bereitstellung des angeforderten Dienstes (Art. 6 Abs. 1 lit. b DSGVO). Sicherheitsprüfungen und Bearbeitungsnachweise dienen dem berechtigten Interesse am Schutz vor Missbrauch und der Nachvollziehbarkeit gemeinsamer Änderungen (Art. 6 Abs. 1 lit. f DSGVO). Technisch notwendige Speicherung auf dem Endgerät erfolgt gemäß § 25 Abs. 2 Nr. 2 TDDDG. Freiwillige Angaben und Benachrichtigungseinstellungen können weggelassen beziehungsweise deaktiviert werden."
+  ],
+  [
+    "Welche Daten gespeichert werden",
+    "Auf dem Server werden Benutzername, gehashte PIN, Kontostatus, Klassen- und Kurszuordnung, Einstellungen, Sitzungsnachweise und Benachrichtigungsabonnements gespeichert. Gemeinsame Kalenderinhalte einschließlich Anhängen sowie Ersteller, letzter Bearbeiter und bei Löschung der löschende Nutzer werden im Backend gespeichert. Gemeinsame Termine werden berechtigten Nutzern angezeigt. Private Termine und Kategorien werden serverseitig verschlüsselt gespeichert und nur für das jeweilige Konto bereitgestellt. Bei Supportanfragen werden die mitgeteilten Angaben verarbeitet. Beim Aufruf fallen technisch IP-Adresse, Zeitpunkt und angefragte Adresse an; fehlgeschlagene Anmeldungen werden zum Schutz vor Missbrauch erfasst."
+  ],
+  [
+    "Vertretungspläne und Datenquellen",
+    "Die Schule erstellt die Plandaten und stellt sie auf den Servern von VpMobil/stundenplan24 bereit. Dieses Projekt ruft die dort gehosteten Daten serverseitig mit den hinterlegten Schulzugangsdaten ab und speichert sie für die Anzeige zwischen. Verarbeitet werden Datum, Klasse, Kurs, Fach, Unterrichtszeit, Raum, Lehrkraftangaben beziehungsweise Kürzel sowie Vertretungs-, Ausfall- und Änderungsinformationen, soweit die Schule diese im Plan veröffentlicht. Die Daten stammen damit von der Schule und werden nicht bei den betroffenen Lehrkräften direkt erhoben. Zweck ist die Unterrichtsorganisation für zugriffsberechtigte Nutzer; Grundlage ist das berechtigte Interesse an der verlässlichen Information über den Unterricht (Art. 6 Abs. 1 lit. f DSGVO). Der Schulplan wird durch dieses Projekt nicht verändert. Kalenderinhalte und Anhänge stammen von den eintragenden Nutzern; Konto- und Zuordnungsdaten können auch vom Betreiber stammen. Das Projekt ist ein privat betriebenes Angebot und kein offizieller Dienst der Schule."
+  ],
+  [
+    "Cookies und Speicherung auf dem Gerät",
+    "Für die Anmeldung wird eine zufällige Sitzungskennung in einem technisch notwendigen Cookie gespeichert. Sitzungscookies sind HttpOnly und SameSite=Lax und bei HTTPS zusätzlich Secure; HttpOnly verhindert das Auslesen durch Browser-JavaScript. Die PIN selbst wird nicht im Sitzungscookie gespeichert. Der Server prüft die Kennung anhand eines serverseitigen Sitzungsnachweises. Anmeldecookies laufen nach 14 Tagen ab; beim Abmelden wird die verwendete Sitzung widerrufen. Cookies für Klassen- und Fachauswahl sowie Darstellungseinstellungen und lokaler Browserspeicher merken sich deine Auswahl. Solche Einstellungen können bestehen bleiben, bis sie ablaufen oder von dir gelöscht werden. Die ntfy-Weboberfläche kann Abonnements, Einstellungen und Mitteilungen auch in localStorage und IndexedDB auf dem Gerät speichern. Technisch notwendige Speicherungen für ausdrücklich gewünschte Funktionen erfolgen nach § 25 Abs. 2 Nr. 2 TDDDG. Du kannst diese Daten in den Browser-Einstellungen löschen; dadurch können Anmeldung und gespeicherte Einstellungen verloren gehen. Die Daten bleiben nicht ausschließlich auf dem Gerät. Die Anwendung enthält keine Werbe- oder Analyse-Tracker."
+  ],
+  [
+    "Eingesetzte Software und Verarbeitung",
+    "{PRIVACY_TOOLS}."
+  ],
+  [
+    "Empfänger und externe Dienste",
+    "Es erfolgt keine Weitergabe zu Werbezwecken und kein Verkauf von Daten. Gemeinsame allgemeine Termine sind für berechtigte Kalendernutzer sichtbar, kursbezogene Termine entsprechend der Kurszuordnung. Mit ihnen können auch Autoren- und Bearbeitungsangaben sowie Anhänge zugänglich sein. Private Termine werden durch die Anwendung nur dem zugehörigen Konto bereitgestellt. Der Betreiber und mit Wartung oder Hosting befasste Dienstleister können im erforderlichen Umfang Zugriff auf gespeicherte Daten haben. Konkrete Anbieter, Push-Übermittlung und mögliche Drittlandverarbeitung: {PRIVACY_PROCESSORS}."
+  ],
+  [
+    "Speicherdauer und Löschung",
+    "{PRIVACY_RETENTION}. Gesetzliche Aufbewahrungspflichten oder konkret erforderliche Beweissicherung können eine begrenzte weitere Speicherung einzelner Daten rechtfertigen; diese Daten werden dann nur für diesen Zweck verwendet. Eine auf deinem Gerät bereits zugestellte Mitteilung wird durch die spätere Bearbeitung oder Löschung eines Kalendereintrags nicht rückwirkend entfernt."
+  ],
+  [
+    "Benachrichtigungen und Bearbeitungsnachweise",
+    "Benachrichtigungen berücksichtigen die von dir gewählten Kategorien, Zeiten, Vorlauftage und Kurse. Vor dem Versand werden der aktuelle Eintrag, sein Löschstatus und deine Einstellungen erneut geprüft. Versandnachweise verhindern doppelte Zustellungen und dokumentieren bereits ausgeführte Sendungen. Je nach Benachrichtigung werden Terminbezeichnung, Zeitpunkt, Kurs oder Unterrichts- und Rauminformationen an deinen persönlichen ntfy-Kanal übermittelt. Die Anzeige auf dem Sperrbildschirm steuerst du in den Einstellungen deines Geräts. Du kannst Benachrichtigungen in den Kontoeinstellungen deaktivieren. Bei gemeinsamen Kalenderänderungen speichert das Backend den erstellenden beziehungsweise zuletzt bearbeitenden oder löschenden Nutzer zur Nachvollziehbarkeit; dies dient nicht der Bewertung von schulischen Leistungen."
+  ],
+  [
+    "Zuständige Datenschutzaufsicht und Beschwerde",
+    "Du kannst dich unabhängig von einer Anfrage bei uns bei einer Datenschutzaufsichtsbehörde beschweren. Für den Betreiber in Sachsen: {PRIVACY_AUTHORITY}. Das Beschwerderecht bei anderen nach Art. 77 DSGVO zuständigen Aufsichtsbehörden bleibt bestehen."
+  ],
+  [
+    "Deine Rechte",
+    "Du hast nach Maßgabe der DSGVO das Recht auf Auskunft, Berichtigung, Löschung, Einschränkung der Verarbeitung und Datenübertragbarkeit (Art. 15–20 DSGVO). Einer Verarbeitung aufgrund berechtigter Interessen kannst du aus Gründen deiner besonderen Situation widersprechen (Art. 21 DSGVO). Eine gegebenenfalls erteilte Einwilligung kann jederzeit mit Wirkung für die Zukunft widerrufen werden. Wende dich dafür an die oben genannte Kontaktadresse. Du kannst dich bei einer Datenschutzaufsichtsbehörde beschweren, insbesondere an deinem Aufenthaltsort, Arbeitsplatz oder am Ort des vermuteten Verstoßes (Art. 77 DSGVO). Es findet keine automatisierte Entscheidungsfindung einschließlich Profiling mit rechtlicher oder ähnlich erheblicher Wirkung statt. Anfragen werden grundsätzlich innerhalb eines Monats beantwortet. Soweit rechtlich zulässig, kann die Frist wegen Komplexität oder Anzahl der Anfragen verlängert werden; darüber wirst du innerhalb des ersten Monats informiert. Bei begründeten Zweifeln an deiner Identität können dafür erforderliche Nachweise angefordert werden. Ein Widerspruch gegen eine Verarbeitung nach Art. 6 Abs. 1 lit. f DSGVO wird anhand deiner besonderen Situation geprüft."
+  ],
+  [
+    "Erforderlichkeit und Sicherheit",
+    "Benutzername, Kontozuordnung, Sitzung und persönliche PIN sind für die geschützten Funktionen erforderlich. Ohne diese Angaben kann kein geschützter Zugang bereitgestellt werden. Es besteht keine gesetzliche Pflicht, dieses private Angebot zu nutzen. Kalenderinhalte, Anhänge und Benachrichtigungen sind freiwillig; ohne Aktivierung werden die entsprechenden Benachrichtigungen nicht versendet. Bitte veröffentliche keine Gesundheitsdaten oder andere besonders sensiblen Angaben über dich oder andere Personen. Berechtigungsprüfungen begrenzen Lese- und Schreibzugriffe; Anmeldeversuche werden begrenzt, Administratoraktionen zusätzlich geschützt und Sitzungen bei PIN-Reset widerrufen. Vierstellige PINs haben nur einen begrenzten Wertebereich; Hashing und Zugriffsschutz beseitigen dieses Restrisiko nicht."
+  ],
+  [
+    "PIN-Hashing und Verschlüsselung",
+    "PINs werden bei der Einrichtung und Änderung nicht reversibel verschlüsselt, sondern mit einer Passwort-Hashfunktion verarbeitet. Für gemeinsame Kalenderkonten verwendet die Anwendung scrypt mit einem kryptografisch zufälligen Salt von 16 Byte und einem abgeleiteten Hash von 64 Byte (N=16384, r=8, p=1). Der Salt sorgt dafür, dass gleiche PINs unterschiedliche gespeicherte Hashes ergeben. Bei der Anmeldung wird aus der eingegebenen PIN erneut ein Prüfwert berechnet und mit dem gespeicherten Wert verglichen. Reine VP-Konten verwenden im Python-Kontodienst Argon2id mit 64 MiB Speicher, drei Durchläufen und Parallelität 2; administrativ gesetzte kompatible scrypt-Werte werden dort bei erfolgreicher Anmeldung aktualisiert. Für ältere Kontobestände besteht Kompatibilität mit früheren SHA-256-Hashformaten und alten Klartextbeständen; diese werden bei erfolgreicher PIN-Anmeldung auf das aktuelle Verfahren umgestellt. Private Kalenderdaten werden serverseitig mit AES-256-GCM einschließlich Integritätsprüfung und Bindung an das Benutzerkonto verschlüsselt. Gespeicherte ntfy-Zugangsdaten werden mit Fernet (AES-128-CBC und HMAC-SHA256) geschützt. Die zur Entschlüsselung nötigen Schlüssel liegen in der Serverkonfiguration. Das ist keine Ende-zu-Ende-Verschlüsselung gegenüber dem Betreiber. Gemeinsame Kalenderinhalte und separat gespeicherte Anhänge sind von dieser speziellen Verschlüsselung privater Kalenderdaten nicht umfasst."
+  ],
+  [
+    "Lizenz der Projektsoftware",
+    "Die Projektsoftware wird unter der European Union Public Licence (EUPL) 1.2 bereitgestellt. Diese Softwarelizenz ist keine Einwilligung zur Verarbeitung personenbezogener Daten und ändert deine Datenschutzrechte nicht. Eingebundene Bibliotheken behalten ihre jeweiligen Lizenzen."
+  ]
+]

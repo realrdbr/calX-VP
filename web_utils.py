@@ -1,4 +1,6 @@
 import os
+import json
+from pathlib import Path
 from html import escape
 from datetime import date, datetime, timedelta
 from http import cookies
@@ -14,6 +16,32 @@ _requested_host = os.getenv("BIND_HOST", os.getenv("HOST", "127.0.0.1"))
 DEFAULT_HOST = "0.0.0.0" if os.path.exists("/.dockerenv") and _requested_host in {"127.0.0.1", "localhost"} else _requested_host
 CALENDAR_PUBLIC_URL = os.getenv("CALENDAR_PUBLIC_URL", "http://127.0.0.1:3000").rstrip("/")
 VERTRETUNGSPLAN_PUBLIC_URL = os.getenv("VERTRETUNGSPLAN_PUBLIC_URL", "http://127.0.0.1:8000").rstrip("/")
+
+
+def render_legal_links() -> str:
+    return '<nav class="legal-links" aria-label="Informationen und Rechtliches"><button type="button" class="legal-link" data-info-open>Info</button><a class="legal-link" href="/datenschutz">Datenschutzerklärung</a><a class="legal-link" href="/impressum">Impressum</a></nav>'
+
+
+def render_info_popup() -> str:
+    info = json.loads((Path(__file__).parent / "public/info.json").read_text())
+    paragraphs = ''.join('<p>' + escape(text) + '</p>' for text in info['paragraphs'])
+    support = escape(os.getenv("SUPPORT_MAIL", "support@cal11.de"))
+    return (
+        '<dialog class="info-dialog" data-info-dialog aria-label="Info"><div class="info-head"><h2>Info</h2>'
+        '<button type="button" class="info-close" data-info-close aria-label="Schließen">✕</button></div>'
+        '<div class="info-content">' + paragraphs + '<p>' + escape(info['supportPrefix']) + ' ' + support + '.</p>'
+        '<p><a href="' + escape(info['repository'], quote=True) + '" target="_blank" rel="noopener noreferrer">Quellcode auf GitHub</a></p>'
+        '<p>' + escape(info.get('license', '')) + '</p>'
+        '<nav class="legal-links" aria-label="Rechtliches"><a class="legal-link" href="/datenschutz">Datenschutz</a><a class="legal-link" href="/impressum">Impressum</a></nav></div>'
+        '<button type="button" class="info-submit" data-info-close>Schließen</button></dialog>'
+        """<script>(() => {
+          const dialog = document.querySelector('[data-info-dialog]');
+          if (!dialog) return;
+          document.querySelectorAll('[data-info-open]').forEach(button => button.addEventListener('click', () => { if (!dialog.open) dialog.showModal(); }));
+          dialog.querySelectorAll('[data-info-close]').forEach(button => button.addEventListener('click', () => dialog.close()));
+          dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
+        })();</script>"""
+    )
 
 
 def render_vp_navigation(
@@ -88,19 +116,25 @@ def render_pin_change_modal(csrf_token: str | None, *, force: bool = False, erro
     if error:
         message = f'<p class="pin-modal-notice">{escape(error)}</p>'
     close_button = '<button class="pin-modal-close" type="button" data-pin-modal-close aria-label="Schließen">×</button>'
+    if force:
+        close_button = ""
+    logout_button = '<button type="submit" formaction="/logout" formnovalidate>Abmelden</button>' if force else ""
     open_attr = " open" if force or error or changed else ""
     return f"""
     <dialog class="pin-modal"{open_attr} data-pin-modal data-force-pin-change="{'1' if force else '0'}">
       <form method="post" action="/pin-aendern" class="pin-modal-card">
         <input type="hidden" name="csrf_token" value="{escape(csrf_token)}">
         <div class="pin-modal-head">
-          <div><span>VP-only</span><h2>PIN ändern</h2></div>
+          <div><span>Kontosicherheit</span><h2>Persönliche PIN festlegen</h2></div>
           {close_button}
         </div>
         {message}
+        <p>Lege deine persönliche vierstellige PIN fest, um fortzufahren.</p>
         <label>Neue PIN<input name="pin" type="password" inputmode="numeric" pattern="[0-9]{{4}}" minlength="4" maxlength="4" required autocomplete="new-password" autofocus></label>
         <label>Neue PIN wiederholen<input name="pin_confirm" type="password" inputmode="numeric" pattern="[0-9]{{4}}" minlength="4" maxlength="4" required autocomplete="new-password"></label>
         <button type="submit">PIN speichern</button>
+        {logout_button}
+        {render_legal_links()}
       </form>
     </dialog>
     <script>
@@ -118,7 +152,7 @@ def render_pin_change_modal(csrf_token: str | None, *, force: bool = False, erro
         if (typeof dialog.showModal === 'function' && !dialog.open) dialog.showModal();
         else dialog.setAttribute('open', '');
       }};
-      const close = () => {{ dialog.close ? dialog.close() : dialog.removeAttribute('open'); }};
+      const close = () => {{ if (force) return; dialog.close ? dialog.close() : dialog.removeAttribute('open'); }};
       openers.forEach((button) => button.addEventListener('click', open));
       closers.forEach((button) => button.addEventListener('click', close));
       dialog.addEventListener('cancel', (event) => {{ if (force) event.preventDefault(); }});
@@ -333,7 +367,12 @@ def make_cookie(
 def send_html(handler: BaseHTTPRequestHandler, html: str, cookie_headers: list[str] | None = None) -> None:
     """Sendet eine HTML-Antwort an den Browser."""
 
-    if "</body>" in html and SESSION_WATCH_SCRIPT not in html:
+    if "</body>" in html:
+        styles = (Path(__file__).parent / "public/legal-ui.css").read_text()
+        html = html.replace("</head>", '<style>' + styles + '</style></head>', 1)
+        footer = '' if 'data-legal-footer' in html else '<footer class="legal-footer">' + render_legal_links() + '</footer>'
+        html = html.replace("</body>", footer + render_info_popup() + "</body>", 1)
+    if "</body>" in html and SESSION_WATCH_SCRIPT not in html and handler.path.split("?")[0] not in {"/datenschutz", "/info", "/impressum"}:
         html = html.replace("</body>", f"{SESSION_WATCH_SCRIPT}</body>", 1)
 
     handler.send_response(200)

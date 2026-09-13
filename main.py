@@ -32,7 +32,7 @@ from web_utils import cookie_values, format_week_value, join_cookie_list, make_c
 load_dotenv()
 ROOT = Path(__file__).resolve().parent
 SESSION_COOKIE = "cal11_session"
-COOKIE_SECURE = os.getenv("COOKIE_SECURE", "true").lower() in {"1", "true", "yes"}
+COOKIE_SECURE = os.getenv("COOKIE_SECURE", "true").lower() in {"1", "true", "yes"} or any(os.getenv(key, "").startswith("https://") for key in ("CALENDAR_PUBLIC_URL", "VERTRETUNGSPLAN_PUBLIC_URL"))
 
 
 def resolve_cookie_domain() -> str | None:
@@ -172,6 +172,7 @@ class NotificationWorker(Thread):
 
     def run(self) -> None:
         heartbeat_at = 0.0
+        log_cleanup_at = 0.0
         zone = ZoneInfo(os.getenv("APP_TIMEZONE", "Europe/Berlin"))
         emit("ntfy.worker_started", interval_seconds=self.interval, timezone=str(zone),
              internal_endpoint=endpoint(self.notifier.ntfy_url),
@@ -180,6 +181,9 @@ class NotificationWorker(Thread):
         while not self.stop_event.is_set():
             started = time.monotonic()
             try:
+                if started >= log_cleanup_at:
+                    self.store.delete_expired_login_attempts()
+                    log_cleanup_at = started + 3600
                 local_now = datetime.now(zone).replace(tzinfo=None)
                 deleted = self.notifier.delete_expired_client_notifications(local_now)
                 if deleted:
@@ -263,8 +267,8 @@ class AppRequestHandler(BaseHTTPRequestHandler):
 
     def _nav_flags(self, session: Session) -> dict[str, bool]:
         return {
-            "can_change_pin": session.user.vp_only,
-            "force_pin_change": session.user.vp_only and session.user.must_change_pin,
+            "can_change_pin": session.user.vp_only or session.user.must_change_pin,
+            "force_pin_change": session.user.must_change_pin,
             "session_username": session.user.username,
         }
 
@@ -285,9 +289,21 @@ class AppRequestHandler(BaseHTTPRequestHandler):
     def _subject_field_name(class_name: str) -> str:
         return f"subject__{quote(class_name, safe='')}"
 
+    def _render_required_pin(self, session: Session, error: str | None = None) -> None:
+        from web_utils import render_pin_change_modal, render_theme_script, COMMON_CSS
+        page = '<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PIN festlegen</title><style>' + COMMON_CSS + '</style></head><body><main><h1>Bitte lege deine persönliche PIN fest.</h1>'
+        send_html(self, page + render_pin_change_modal(session.csrf_token, force=True, error=error) + '</main>' + render_theme_script() + '</body></html>')
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
+        if parsed.path == "/info":
+            redirect(self, "/")
+            return
+        if parsed.path in {"/datenschutz", "/impressum"}:
+            from legal import render_legal_page
+            send_html(self, render_legal_page(imprint=parsed.path == "/impressum"))
+            return
         if parsed.path in {
             "/icons/favicon.png",
             "/icons/logo_cal11.webp",
@@ -323,6 +339,9 @@ class AppRequestHandler(BaseHTTPRequestHandler):
         session = self._session()
         if session is None:
             redirect(self, "/login")
+            return
+        if session.user.must_change_pin:
+            self._render_required_pin(session)
             return
         if parsed.path == "/pin-aendern":
             redirect(self, "/")
@@ -408,7 +427,7 @@ class AppRequestHandler(BaseHTTPRequestHandler):
             redirect(self, "/login", session_cookie_headers("", 0))
             return
         if path == "/pin-aendern":
-            if not session.user.vp_only:
+            if not session.user.vp_only and not session.user.must_change_pin:
                 self.send_error(403, "Nur VP-only-Nutzer können ihre PIN hier ändern.")
                 return
             try:
@@ -416,10 +435,19 @@ class AppRequestHandler(BaseHTTPRequestHandler):
                 pin_confirm = self._field(data, "pin_confirm")
                 if pin != pin_confirm:
                     raise ValueError("Die PIN-Wiederholung stimmt nicht überein.")
-                self.store.change_vp_only_pin(session.user.username, pin)
-                self.handle_plan_page({}, pin_modal_changed=True)
+                if session.user.vp_only:
+                    self.store.change_vp_only_pin(session.user.username, pin)
+                else:
+                    self.store.set_required_calendar_pin(session.user.username, pin)
+                self.store.delete_user_sessions(session.user.username)
+                token, _ = self.store.create_session(session.user.id)
+                redirect(self, "/", session_cookie_headers(token, 14 * 86400))
             except Exception as error:
-                self.handle_plan_page({}, pin_modal_error=str(error))
+                message = str(error) if isinstance(error, ValueError) else "PIN konnte nicht gespeichert werden. Bitte versuche es erneut."
+                if session.user.must_change_pin:
+                    self._render_required_pin(session, message)
+                else:
+                    self.handle_plan_page({}, pin_modal_error=message)
             return
         if session.user.must_change_pin:
             redirect(self, "/")

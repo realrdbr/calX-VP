@@ -184,6 +184,20 @@ export async function deleteUserSessions(username: string): Promise<void> {
   }
 }
 
+export async function closeDatabase(): Promise<void> {
+  const connectionPool = pool;
+  pool = null;
+  isConnected = false;
+  if (connectionPool) await connectionPool.end();
+}
+
+export async function dbCleanupExpiredLoginAttempts(): Promise<void> {
+  if (isConnected && pool) {
+    const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
+    await pool.query('DELETE FROM calendar_login_attempts WHERE attempted_at < ?', [cutoff]);
+  }
+}
+
 export async function dbRecordCalendarLoginAttempt(username: string, ipAddress: string, successful: boolean): Promise<void> {
   if (isConnected && pool) {
     await pool.query(
@@ -337,24 +351,28 @@ export async function initDatabase() {
         if (error?.code !== 'ER_DUP_KEYNAME') throw error;
       });
 
+      // Additive migrations preserve rows from early calendar releases.
+      const addLegacyColumn = async (table: string, column: string, definition: string) => {
+        try {
+          await conn.query(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+        } catch (error: any) {
+          if (error?.code !== 'ER_DUP_FIELDNAME') throw error;
+        }
+      };
+      await addLegacyColumn('users', 'courses', "LONGTEXT NOT NULL DEFAULT '[]'");
+      await addLegacyColumn('users', 'preferences', "LONGTEXT NOT NULL DEFAULT '{}'");
+      await addLegacyColumn('users', 'pin', 'VARCHAR(255) DEFAULT NULL');
+
       // Ensure pin column in existing tables is widened to VARCHAR(255)
-      try {
-        await conn.query('ALTER TABLE users MODIFY COLUMN pin VARCHAR(255) DEFAULT NULL;');
-      } catch (e) {
-        // Ignored if column modification is not needed
-      }
+      await conn.query('ALTER TABLE users MODIFY COLUMN pin VARCHAR(255) DEFAULT NULL;');
 
       // Ensure status column exists in existing tables
-      try {
-        await conn.query("ALTER TABLE users ADD COLUMN status VARCHAR(20) DEFAULT 'ACTIVE';");
-      } catch (e) {}
+      await addLegacyColumn('users', 'status', "VARCHAR(20) DEFAULT 'ACTIVE'");
 
       // The initial VP class belongs to the shared calendar account as well.
       // Keeping it here lets the VP service bootstrap a matching account on a
       // fresh browser/device instead of falling back to VP_DEFAULT_CLASS.
-      try {
-        await conn.query("ALTER TABLE users ADD COLUMN class_name VARCHAR(64) NOT NULL DEFAULT '11';");
-      } catch (e) {}
+      await addLegacyColumn('users', 'class_name', "VARCHAR(64) NOT NULL DEFAULT '11'");
 
       // Migrate the former standalone admin list into the authoritative user
       // status before removing the redundant table.
@@ -378,6 +396,7 @@ export async function initDatabase() {
           locked TINYINT(1) NOT NULL DEFAULT 0
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
       `);
+      await addLegacyColumn('event_categories', 'sort_order', 'INT NOT NULL DEFAULT 0');
       // Bei alten Datenbanken wird die neue Sperrspalte einmalig ergänzt und
       // Ferien als sichere Voreinstellung gesperrt. Sobald die Spalte bereits
       // existiert, bleibt eine spätere Admin-Entscheidung (auch Entsperren)
@@ -400,6 +419,7 @@ export async function initDatabase() {
           type VARCHAR(32) NOT NULL,
           description LONGTEXT,
           author VARCHAR(64),
+          updated_by VARCHAR(64) DEFAULT NULL,
           attachments LONGTEXT,
           deleted_at DATETIME NULL,
           deleted_by VARCHAR(64) DEFAULT NULL,
@@ -408,17 +428,25 @@ export async function initDatabase() {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
       `);
 
+      for (const [column, definition] of Object.entries({
+        end_date: 'VARCHAR(32) DEFAULT NULL',
+        description: 'LONGTEXT DEFAULT NULL',
+        author: 'VARCHAR(64) DEFAULT NULL',
+        attachments: 'LONGTEXT DEFAULT NULL',
+        deleted_at: 'DATETIME DEFAULT NULL',
+        created_at: 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP',
+      })) await addLegacyColumn('events', column, definition);
+
+      await addLegacyColumn('events', 'start_time', 'VARCHAR(16) DEFAULT NULL');
+      await addLegacyColumn('events', 'end_time', 'VARCHAR(16) DEFAULT NULL');
+      await addLegacyColumn('events', 'deleted_by', 'VARCHAR(64) DEFAULT NULL');
       try {
-        await conn.query('ALTER TABLE events ADD COLUMN start_time VARCHAR(16) DEFAULT NULL;');
-      } catch (e) {}
-      try {
-        await conn.query('ALTER TABLE events ADD COLUMN end_time VARCHAR(16) DEFAULT NULL;');
-      } catch (e) {}
-      try {
-        await conn.query('ALTER TABLE events ADD COLUMN deleted_by VARCHAR(64) DEFAULT NULL;');
-      } catch (e) {}
-      try { await conn.query('ALTER TABLE events ADD COLUMN updated_at TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6);'); } catch (e) {}
-      try { await conn.query('ALTER TABLE events MODIFY COLUMN updated_at TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6);'); } catch (e) {}
+        await conn.query('ALTER TABLE events ADD COLUMN updated_by VARCHAR(64) DEFAULT NULL');
+      } catch (error: any) {
+        if (error.code !== 'ER_DUP_FIELDNAME') throw error;
+      }
+      await addLegacyColumn('events', 'updated_at', 'TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)');
+      await conn.query('ALTER TABLE events MODIFY COLUMN updated_at TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)');
 
       await conn.query(`
         DELETE FROM events
@@ -436,6 +464,9 @@ export async function initDatabase() {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
       `);
 
+      await addLegacyColumn('courses', 'teacher', "VARCHAR(255) NOT NULL DEFAULT ''");
+      await addLegacyColumn('courses', 'type', "VARCHAR(16) NOT NULL DEFAULT 'GK'");
+      await addLegacyColumn('courses', 'sort_order', 'INT NOT NULL DEFAULT 999');
       try {
         await conn.query('ALTER TABLE courses MODIFY COLUMN id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;');
         await conn.query('ALTER TABLE courses MODIFY COLUMN name VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;');
@@ -665,6 +696,23 @@ export async function dbSaveUser(username: string, data: { courses?: string[]; p
     className,
   };
   return { username: uname, ...memoryStore.users[uname] };
+}
+
+// Compare-and-set prevents a stale setup session from overwriting a newly set PIN.
+export async function dbSetRequiredPin(username: string, expectedPin: string | undefined, pin: string) {
+  if (!/^\d{4}$/.test(pin)) throw new Error('Die PIN muss exakt vier Ziffern enthalten.');
+  const user = await dbGetUser(username);
+  if (!user || (user.pin && !user.preferences?.forcePinChange) || user.pin !== expectedPin) return false;
+  const preferences = { ...user.preferences, forcePinChange: false };
+  if (isConnected && pool) {
+    const [result]: any = await pool.query(
+      "UPDATE users SET pin = ?, preferences = ? WHERE LOWER(username) = LOWER(?) AND COALESCE(pin, '') = ?",
+      [hashPin(pin), JSON.stringify(preferences), username, expectedPin || '']
+    );
+    return result.affectedRows === 1;
+  }
+  memoryStore.users[username.toLowerCase()] = { ...memoryStore.users[username.toLowerCase()], pin: hashPin(pin), preferences };
+  return true;
 }
 
 export async function dbAdminSetUserPin(username: string, pin: string) {
@@ -1058,7 +1106,7 @@ function mysqlTimestampFromIso(value: string): string | null {
   return `${parsed.toISOString().slice(0, 23).replace('T', ' ')}000`;
 }
 
-export async function dbUpdateEvent(id: string, data: any, expectedUpdatedAt?: string) {
+export async function dbUpdateEvent(id: string, data: any, expectedUpdatedAt?: string, editedBy?: string) {
   if (isConnected && pool) {
     const [existing]: any = await pool.query("SELECT events.*, DATE_FORMAT(updated_at, '%Y-%m-%dT%H:%i:%s.%fZ') AS updated_at_version FROM events WHERE id = ?", [id]);
     if (existing.length === 0) return null;
@@ -1080,11 +1128,11 @@ export async function dbUpdateEvent(id: string, data: any, expectedUpdatedAt?: s
     if (expectedUpdatedAt && !expectedTimestamp) return null;
     const [result]: any = await pool.query(
       `UPDATE events 
-       SET title = ?, date = ?, end_date = ?, start_time = ?, end_time = ?, course_id = ?, type = ?, description = ?, attachments = ?, updated_at = CURRENT_TIMESTAMP(6)
+       SET title = ?, date = ?, end_date = ?, start_time = ?, end_time = ?, course_id = ?, type = ?, description = ?, attachments = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP(6)
        WHERE id = ?${expectedTimestamp ? ' AND updated_at = ?' : ''}`,
       expectedTimestamp
-        ? [title, date, endDate, startTime, endTime, courseId, type, description, attachments, id, expectedTimestamp]
-        : [title, date, endDate, startTime, endTime, courseId, type, description, attachments, id]
+        ? [title, date, endDate, startTime, endTime, courseId, type, description, attachments, editedBy || current.updated_by || null, id, expectedTimestamp]
+        : [title, date, endDate, startTime, endTime, courseId, type, description, attachments, editedBy || current.updated_by || null, id]
     );
     if (result.affectedRows !== 1) return null;
 
@@ -1109,7 +1157,7 @@ export async function dbUpdateEvent(id: string, data: any, expectedUpdatedAt?: s
     const current = memoryStore.events[idx];
     if (expectedUpdatedAt && current.updatedAt && current.updatedAt !== expectedUpdatedAt) return null;
     const nextUpdateAt = new Date(Math.max(Date.now(), (current.updatedAt ? new Date(current.updatedAt).getTime() : 0) + 1)).toISOString();
-    const nextEvent = { ...current, ...data, updatedAt: nextUpdateAt };
+    const nextEvent = { ...current, ...data, updatedBy: editedBy || current.updatedBy, updatedAt: nextUpdateAt };
     if (!nextEvent.endDate || nextEvent.endDate < nextEvent.date) nextEvent.endDate = nextEvent.date;
     memoryStore.events[idx] = nextEvent;
     return memoryStore.events[idx];

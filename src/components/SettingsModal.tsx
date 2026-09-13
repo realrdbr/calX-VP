@@ -346,9 +346,12 @@ export default function SettingsModal({
                         </label>
                         <input
                           type="password"
+                          inputMode="numeric"
+                          pattern="[0-9]{4}"
+                          autoComplete="current-password"
                           maxLength={4}
                           value={oldPin}
-                          onChange={(e) => setOldPin(e.target.value)}
+                          onChange={(e) => setOldPin(e.target.value.replace(/[^0-9]/g, '').slice(0, 4))}
                           placeholder="••••"
                           className={`w-full px-4 py-2.5 ${theme.bgInput} border ${theme.borderInput} ${theme.textMain} rounded-xl focus:outline-none transition-colors tracking-[0.5em] text-lg text-center placeholder-opacity-40`}
                         />
@@ -361,9 +364,12 @@ export default function SettingsModal({
                       </label>
                       <input
                         type="password"
+                        inputMode="numeric"
+                        pattern="[0-9]{4}"
+                        autoComplete="new-password"
                         maxLength={4}
                         value={newPin}
-                        onChange={(e) => setNewPin(e.target.value)}
+                        onChange={(e) => setNewPin(e.target.value.replace(/[^0-9]/g, '').slice(0, 4))}
                         placeholder="••••"
                         className={`w-full px-4 py-2.5 ${theme.bgInput} border ${theme.borderInput} ${theme.textMain} rounded-xl focus:outline-none transition-colors tracking-[0.5em] text-lg text-center placeholder-opacity-40`}
                         style={{ borderBottomColor: newPin.length > 0 ? accentColor : undefined }}

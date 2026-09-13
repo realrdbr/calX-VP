@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "../public/legal-ui.css";
 
 @layer base {
   html,

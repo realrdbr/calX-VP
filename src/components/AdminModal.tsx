@@ -184,10 +184,10 @@ export default function AdminModal({ isOpen, onClose, username, preferences }: P
   };
 
   const handleResetPin = async (uname: string) => {
-    if (!confirm(`PIN von ${uname} wirklich zurücksetzen?`)) return;
+    if (!confirm(`PIN von ${uname} wirklich zurücksetzen?\n\nDas wird nicht empfohlen. Ohne PIN entfällt vorübergehend der persönliche PIN-Schutz. Bestehende Sitzungen werden beendet; bei der nächsten Anmeldung muss eine neue vierstellige PIN festgelegt werden.\n\nPrüfe vorher die Identität der Person. Empfohlen: Über „PIN ändern“ eine Start-PIN setzen und sicher persönlich weitergeben.\n\nPIN trotzdem zurücksetzen?`)) return;
     try {
       await adminResetUserPin(uname, adminToken);
-      alert(`PIN für ${uname} wurde gelöscht.`);
+      alert(`PIN für ${uname} wurde zurückgesetzt. Bestehende Sitzungen wurden beendet. Bei der nächsten Anmeldung muss eine neue PIN festgelegt werden.`);
     } catch (err) {
       if (!handleAdminRequestError(err)) alert('Fehler beim Zurücksetzen.');
     }

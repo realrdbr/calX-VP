@@ -1,3 +1,7 @@
+import { renderLegalText } from './server/legalText';
+import { permitsPinSetupRequest, requiresPersonalPin } from './server/pinPolicy';
+import legalDefaults from './public/legal-defaults.json';
+import privacySections from './public/privacy.json';
 import { setVisibleEventCompletion } from "./server/eventCompletion";
 import express from 'express';
 import { uploadDownloads } from './server/uploadDownloads';
@@ -12,6 +16,7 @@ import {
   dbGetUser,
   dbGetUsers,
   dbSaveUser,
+  dbSetRequiredPin,
   dbAdminSetUserPin,
   dbCreateVpOnlyUser,
   dbDeleteUser,
@@ -28,6 +33,7 @@ import {
   dbUpdateEvent,
   dbDeleteEvent,
   dbRecordCalendarLoginAttempt,
+  dbCleanupExpiredLoginAttempts,
   dbGetEventById,
   dbCreateFeedback,
   dbGetCourses,
@@ -153,6 +159,8 @@ async function startServer() {
   // Initialize DB or in-memory fallback
   await initDatabase();
   await dbCleanupExpiredEvents();
+  await dbCleanupExpiredLoginAttempts();
+  setInterval(() => { void dbCleanupExpiredLoginAttempts().catch(error => console.error('[Cleanup] Anmeldeprotokolle:', error)); }, 3600000).unref();
   const scheduleCalendarCleanup = () => {
     const now = new Date();
     const next = new Date(now);
@@ -173,6 +181,12 @@ async function startServer() {
   app.use(express.urlencoded({ limit: '50mb', extended: true }));
   app.use('/uploads', uploadDownloads(uploadsDir));
   app.use('/icons', express.static(path.join(process.cwd(), 'icons')));
+
+  app.get('/api/legal', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ controller: process.env.PRIVACY_CONTROLLER || legalDefaults.PRIVACY_CONTROLLER, address: process.env.PRIVACY_ADDRESS || legalDefaults.PRIVACY_ADDRESS, supportMail: process.env.SUPPORT_MAIL || 'support@cal11.de', sections: privacySections.map(([title, body]) =>
+      [title, renderLegalText(body, Object.fromEntries(Object.entries(legalDefaults).map(([key, fallback]) => [key, process.env[key]?.trim() || fallback])))]) });
+  });
 
   // Require active DB connection for all API routes
   app.use('/api', (req, res, next) => {
@@ -346,6 +360,10 @@ async function startServer() {
       return res.status(403).json({ error: 'Dein Konto wurde aufgrund unangemessener Aktivitäten gesperrt.' });
     }
 
+    if (!user) return res.status(401).json({ error: 'Konto nicht gefunden.' });
+    const needsPin = requiresPersonalPin(user);
+    const setupAllowed = permitsPinSetupRequest(req.method, req.path, username);
+    if (needsPin && !setupAllowed) return res.status(403).json({ code: 'PIN_REQUIRED', error: 'Bitte lege zuerst deine persönliche PIN fest.' });
     (req as any).authenticatedUser = username;
     (req as any).authUserStatus = user?.status || 'ACTIVE';
     next();
@@ -458,7 +476,7 @@ async function startServer() {
     }
 
     const updated = await dbSaveUser(username, {
-      preferences,
+      preferences: { ...existing.preferences, ...preferences, forcePinChange: pinToSave ? false : !!existing.preferences?.forcePinChange },
       courses,
       pin: pinToSave
     });
@@ -466,6 +484,22 @@ async function startServer() {
     const token = await generateSessionToken(username);
     res.setHeader('Set-Cookie', sessionCookies(token));
     res.json({ user: sanitizeUser(updated) });
+  });
+
+  app.post('/api/pin', requireAuth, async (req, res) => {
+    const username = String((req as any).authenticatedUser);
+    const user = await dbGetUser(username);
+    const { pin, pinConfirm } = req.body || {};
+    if (typeof pin !== 'string' || !/^\d{4}$/.test(pin) || pin !== pinConfirm) {
+      return res.status(400).json({ error: 'Bitte gib zweimal dieselbe vierstellige PIN ein.' });
+    }
+    if (!await dbSetRequiredPin(username, user?.pin, pin)) {
+      return res.status(409).json({ error: 'Die PIN wurde bereits festgelegt. Bitte melde dich erneut an.' });
+    }
+    await deleteUserSessions(username);
+    const token = await generateSessionToken(username);
+    res.setHeader('Set-Cookie', sessionCookies(token));
+    res.json({ user: sanitizeUser(await dbGetUser(username)) });
   });
 
   app.get('/api/session', requireAuth, async (req, res) => {
@@ -600,7 +634,7 @@ async function startServer() {
         return res.status(400).json({ error: 'Der ausgewählte Kurs existiert nicht.' });
       }
     }
-    const updated = await dbUpdateEvent(id, update, expectedUpdatedAt);
+    const updated = await dbUpdateEvent(id, update, expectedUpdatedAt, currentUser);
     if (!updated) {
       return res.status(expectedUpdatedAt ? 409 : 404).json({
         error: expectedUpdatedAt
@@ -893,6 +927,7 @@ async function startServer() {
     if (!existing) return res.status(404).json({ error: 'Kalendernutzer nicht gefunden.' });
     if (await dbIsAdmin(target)) return res.status(400).json({ error: 'Admin PIN kann nicht zurückgesetzt werden.' });
     await dbSaveUser(target, { pin: null });
+    await deleteUserSessions(target);
     res.json({ success: true });
   });
 
@@ -1016,7 +1051,8 @@ async function startServer() {
 
 startServer();
   const SESSION_COOKIE = 'cal11_session';
-  const cookieSecure = (process.env.COOKIE_SECURE || 'true').toLowerCase() === 'true';
+  const cookieSecure = (process.env.COOKIE_SECURE || 'true').toLowerCase() === 'true'
+    || [process.env.CALENDAR_PUBLIC_URL, process.env.VERTRETUNGSPLAN_PUBLIC_URL].some(url => url?.startsWith('https://'));
   function resolveCookieDomain(): string {
     const configured = (process.env.COOKIE_DOMAIN || '').trim().replace(/^\./, '').toLowerCase();
     const hosts = ['CALENDAR_PUBLIC_URL', 'VERTRETUNGSPLAN_PUBLIC_URL'].map(name => {

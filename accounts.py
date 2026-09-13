@@ -433,6 +433,7 @@ class AccountStore:
                 self._sqlite_add_column_if_missing(connection, "calendar_events", "end_time", "TEXT DEFAULT NULL")
                 self._sqlite_add_column_if_missing(connection, "calendar_events", "description", "TEXT DEFAULT ''")
                 self._sqlite_add_column_if_missing(connection, "calendar_events", "author", "TEXT DEFAULT ''")
+                self._sqlite_add_column_if_missing(connection, "calendar_events", "deleted_at", "TEXT DEFAULT NULL")
                 self._sqlite_add_column_if_missing(connection, "vp_only_users", "must_change_pin", "INTEGER NOT NULL DEFAULT 1 CHECK (must_change_pin IN (0, 1))")
                 self._sqlite_add_column_if_missing(connection, "notification_deliveries", "deleted_at", "TEXT DEFAULT NULL")
                 legacy_subjects_exists = self._fetchone(
@@ -1277,6 +1278,31 @@ class AccountStore:
                     (sort_order, course_type, course_id),
                 )
 
+    def set_required_calendar_pin(self, username: str, pin: str) -> None:
+        username = validate_username(username)
+        validate_pin(pin)
+        with self._connection() as connection:
+            if self._backend == "sqlite":
+                row = self._fetchone(connection, "SELECT users.pin_hash, calendar_users.preferences FROM users LEFT JOIN calendar_users ON users.username = calendar_users.username COLLATE NOCASE WHERE users.username = ? COLLATE NOCASE", (username,))
+                preferences = json.loads(row["preferences"] or "{}") if row else {}
+                if not row or (row["pin_hash"] and not preferences.get("forcePinChange")):
+                    raise ValueError("Eine PIN ist bereits vergeben. Bitte melde dich erneut an.")
+                preferences["forcePinChange"] = False
+                hashed = _hash_shared_pin(pin)
+                cursor = self._execute(connection, "UPDATE users SET pin_hash = ? WHERE username = ? COLLATE NOCASE AND pin_hash = ?", (hashed, username, row["pin_hash"]))
+                self._run(connection, "UPDATE calendar_users SET pin = ?, preferences = ? WHERE username = ? COLLATE NOCASE", (hashed, json.dumps(preferences), username))
+            else:
+                row = self._fetchone(connection, "SELECT pin, preferences FROM users WHERE LOWER(username) = LOWER(?) FOR UPDATE", (username,))
+                preferences = json.loads(row["preferences"] or "{}") if row else {}
+                if not row or (row["pin"] and not preferences.get("forcePinChange")):
+                    raise ValueError("Eine PIN ist bereits vergeben. Bitte melde dich erneut an.")
+                preferences["forcePinChange"] = False
+                cursor = self._execute(connection, "UPDATE users SET pin = ?, preferences = ? WHERE LOWER(username) = LOWER(?)", (_hash_shared_pin(pin), json.dumps(preferences), username))
+            if cursor.rowcount != 1:
+                raise ValueError("Eine PIN ist bereits vergeben. Bitte melde dich erneut an.")
+            if self._backend == "mysql":
+                cursor.close()
+
     def change_vp_only_pin(self, username: str, new_pin: str) -> None:
         username = validate_username(username)
         validate_pin(new_pin)
@@ -1479,6 +1505,11 @@ class AccountStore:
             if rowcount != 1:
                 raise ValueError("Benutzer nicht gefunden.")
 
+    def delete_expired_login_attempts(self) -> None:
+        table = "login_attempts" if self._backend == "sqlite" else "vp_login_attempts"
+        with self._connection() as connection:
+            self._run(connection, f"DELETE FROM {table} WHERE attempted_at < ?", (to_db_time(utcnow() - timedelta(days=30)),))
+
     def _is_locked(self, connection: Any, username: str, ip_address: str) -> bool:
         threshold = to_db_time(utcnow() - LOGIN_WINDOW)
         table = "login_attempts" if self._backend == "sqlite" else "vp_login_attempts"
@@ -1619,8 +1650,9 @@ class AccountStore:
             if self._backend == "sqlite":
                 row = self._fetchone(
                     connection,
-                    """SELECT users.*, sessions.csrf_token, 0 AS vp_only, 0 AS must_change_pin
+                    """SELECT users.*, sessions.csrf_token, 0 AS vp_only, CASE WHEN users.pin_hash IS NULL OR users.pin_hash = '' OR COALESCE(json_extract(calendar_users.preferences, '$.forcePinChange'), 0) = 1 THEN 1 ELSE 0 END AS must_change_pin
                     FROM sessions JOIN users ON users.id = sessions.user_id
+                    LEFT JOIN calendar_users ON calendar_users.username = users.username COLLATE NOCASE
                     WHERE sessions.token_hash = ? AND sessions.expires_at > ? AND users.active = 1""",
                     (self._token_hash(token), to_db_time(utcnow())),
                 )
@@ -1641,7 +1673,7 @@ class AccountStore:
             else:
                 shared_session = self._fetchone(
                     connection,
-                    """SELECT app_sessions.username, app_sessions.csrf_token, users.status
+                    """SELECT app_sessions.username, app_sessions.csrf_token, users.status, users.pin, users.preferences
                     FROM app_sessions
                     JOIN users ON LOWER(users.username) = LOWER(app_sessions.username)
                     WHERE app_sessions.token_hash = ? AND app_sessions.expires_at > ?""",
@@ -1661,7 +1693,7 @@ class AccountStore:
                     if row is not None and bool(row["active"]):
                         row["csrf_token"] = shared_session["csrf_token"]
                         row["vp_only"] = 0
-                        row["must_change_pin"] = 0
+                        row["must_change_pin"] = not shared_session.get("pin") or bool(json.loads(shared_session.get("preferences") or "{}").get("forcePinChange"))
                 if row is None:
                     row = self._fetchone(
                         connection,
@@ -1972,6 +2004,7 @@ class AccountStore:
                 f"""
                 SELECT id, title, date, end_date, start_time, end_time, course_id, type, description, author
                 FROM {self._calendar_events_table()}
+                WHERE deleted_at IS NULL
                 ORDER BY date ASC, COALESCE(start_time, ''), title ASC
                 """,
             )
@@ -2005,7 +2038,7 @@ class AccountStore:
             for recipient in recipients
         ]
 
-    def notification_recipients(self) -> list[NotificationRecipient]:
+    def notification_recipients(self, username: str | None = None) -> list[NotificationRecipient]:
         with self._connection() as connection:
             users_table = self._users_table()
             rows = self._fetchall(
@@ -2018,7 +2051,9 @@ class AccountStore:
                 LEFT JOIN vp_only_users only_users ON only_users.user_id = profile.id
                 WHERE profile.active = 1
                   AND (only_users.username IS NULL OR only_users.active = 1)
+                  {"AND LOWER(profile.username) = LOWER(?)" if username is not None else ""}
                 """,
+                (username,) if username is not None else (),
             )
             selected_class_rows = self._fetchall(
                 connection,

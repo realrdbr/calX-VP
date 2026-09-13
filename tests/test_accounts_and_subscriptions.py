@@ -39,6 +39,102 @@ class AccountAndSubscriptionTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_expired_login_attempts_are_deleted_but_recent_attempts_remain(self):
+        from accounts import to_db_time, utcnow
+        from datetime import timedelta
+        with self.store._connection() as connection:
+            for age in (31, 1):
+                connection.execute("INSERT INTO login_attempts(username, ip_address, attempted_at, successful) VALUES (?, ?, ?, ?)", ("alice", "127.0.0.1", to_db_time(utcnow() - timedelta(days=age)), 0))
+        self.store.delete_expired_login_attempts()
+        with self.store._connection() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM login_attempts").fetchone()[0], 1)
+
+    def test_general_event_changed_to_course_days_ago_only_notifies_current_course(self):
+        import json
+        with self.store._connection() as connection:
+            connection.execute("UPDATE calendar_users SET courses = ? WHERE username = 'bob'", (json.dumps(["MA1"]),))
+            connection.execute("INSERT INTO calendar_events(id, title, date, course_id, type) VALUES ('changed', 'Kursaufgabe', '2026-08-21', 'ALLGEMEIN', 'HAUSAUFGABE')")
+            connection.execute("INSERT INTO calendar_events(id, title, date, course_id, type, deleted_at) VALUES ('old-copy', 'Alte allgemeine Version', '2026-08-21', 'ALLGEMEIN', 'HAUSAUFGABE', '2026-08-18 12:00:00')")
+        settings = NotifySettings(calendar_notifications_enabled=True, calendar_notification_time="16:00", calendar_notification_days_before=1, calendar_notification_types=("HAUSAUFGABE",))
+        for user in (self.alice, self.bob):
+            self.store.save_notify_settings(user.id, settings)
+        notifier = SubscriptionNotifier(self.store, "https://ntfy.invalid")
+        notifier._publish = Mock()
+        plan = SimpleNamespace(datum=date(2026, 8, 20), zeitstempel=None, zeitplan={}, klassen={})
+        self.assertEqual(notifier.poll_once(plan, datetime(2026, 8, 18, 12, 0)), 0)
+        with self.store._connection() as connection:
+            connection.execute("UPDATE calendar_events SET course_id = 'MA1' WHERE id = 'changed'")
+        self.assertEqual(notifier.poll_once(plan, datetime(2026, 8, 20, 16, 0)), 1)
+        self.assertEqual(notifier._publish.call_args.args[0].username, "bob")
+        self.assertNotIn("Alte allgemeine Version", notifier._publish.call_args.args[1])
+        self.assertEqual(notifier.poll_once(plan, datetime(2026, 8, 20, 16, 1)), 0)
+
+    def test_calendar_is_revalidated_before_delivery(self):
+        for change in ("deleted", "soft_deleted", "moved", "course", "disabled", "edited"):
+            with self.subTest(change=change):
+                with self.store._connection() as connection:
+                    connection.execute("DELETE FROM calendar_events")
+                    connection.execute("DELETE FROM notification_deliveries")
+                    connection.execute("INSERT INTO calendar_events(id, title, date, course_id, type, description, author) VALUES (?, ?, ?, ?, ?, ?, ?)", ("fresh", "Alter Titel", "2026-08-21", "ALLGEMEIN", "SONSTIGES", "Alt", "alice"))
+                self.store.save_notify_settings(self.alice.id, NotifySettings(calendar_notifications_enabled=True, calendar_notification_time="16:00", calendar_notification_days_before=1, calendar_notification_types=("SONSTIGES",)))
+                original = self.store.get_calendar_events
+                calls = 0
+                def changing_snapshot(username):
+                    nonlocal calls
+                    events = original(username)
+                    calls += 1
+                    if calls == 1:
+                        with self.store._connection() as connection:
+                            if change == "deleted":
+                                connection.execute("DELETE FROM calendar_events WHERE id = 'fresh'")
+                            elif change == "soft_deleted":
+                                connection.execute("UPDATE calendar_events SET deleted_at = '2026-08-20 15:59:00' WHERE id = 'fresh'")
+                            elif change == "moved":
+                                connection.execute("UPDATE calendar_events SET date = '2026-08-25' WHERE id = 'fresh'")
+                            elif change == "course":
+                                connection.execute("UPDATE calendar_events SET course_id = 'NOT_MY_COURSE' WHERE id = 'fresh'")
+                            elif change == "edited":
+                                connection.execute("UPDATE calendar_events SET title = 'Aktueller Titel', description = 'Aktueller Inhalt' WHERE id = 'fresh'")
+                        if change == "disabled":
+                            self.store.save_notify_settings(self.alice.id, NotifySettings(calendar_notifications_enabled=False))
+                    return events
+                notifier = SubscriptionNotifier(self.store, "https://ntfy.invalid")
+                notifier._publish = Mock()
+                with patch.object(self.store, "get_calendar_events", side_effect=changing_snapshot):
+                    count = notifier.poll_once(SimpleNamespace(datum=date(2026, 8, 20), zeitstempel=None, zeitplan={}, klassen={}), datetime(2026, 8, 20, 16, 0))
+                self.assertEqual(count, 1 if change == "edited" else 0)
+                if change == "edited":
+                    message = notifier._publish.call_args.args[1]
+                    self.assertIn("Aktueller Inhalt", message)
+                    self.assertNotIn("Alter Titel", message)
+
+    def test_calendar_reminders_have_bounded_retry_window(self):
+        from accounts import CalendarEvent
+        event = CalendarEvent("one", "Aufgabe", "2026-08-21", None, None, None, "ALLGEMEIN", "SONSTIGES", "", "alice")
+        settings = NotifySettings(calendar_notification_time="16:00", calendar_notification_days_before=1)
+        self.assertFalse(SubscriptionNotifier._calendar_notification_is_due(event, settings, datetime(2026, 8, 20, 15, 59)))
+        self.assertTrue(SubscriptionNotifier._calendar_notification_is_due(event, settings, datetime(2026, 8, 20, 16, 1)))
+        self.assertFalse(SubscriptionNotifier._calendar_notification_is_due(event, settings, datetime(2026, 8, 20, 16, 21)))
+        self.assertFalse(SubscriptionNotifier._calendar_notification_is_due(event, settings, datetime(2026, 8, 21, 16, 0)))
+
+    def test_required_pin_setup_preserves_existing_pin_and_revokes_old_sessions(self):
+        with self.assertRaises(ValueError):
+            self.store.set_required_calendar_pin("alice", "9876")
+        self.assertIsNotNone(self.store.authenticate("alice", "1234", "127.0.0.1"))
+        with self.store._connection() as connection:
+            connection.execute("UPDATE users SET pin_hash = '' WHERE username = 'alice'")
+            connection.execute("UPDATE calendar_users SET pin = NULL WHERE username = 'alice'")
+        token, _ = self.store.create_session(self.alice.id)
+        self.assertTrue(self.store.get_session(token).user.must_change_pin)
+        self.store.set_required_calendar_pin("alice", "9876")
+        self.store.delete_user_sessions("alice")
+        self.assertIsNone(self.store.get_session(token))
+        new_token, _ = self.store.create_session(self.alice.id)
+        self.assertFalse(self.store.get_session(new_token).user.must_change_pin)
+        self.assertIsNotNone(self.store.authenticate("alice", "9876", "127.0.0.1"))
+        with self.assertRaises(ValueError):
+            self.store.set_required_calendar_pin("alice", "1111")
+
     def test_pin_is_hashed_and_session_is_server_side(self):
         import sqlite3
         with sqlite3.connect(Path(self.temp.name) / "accounts.sqlite") as connection:
@@ -192,14 +288,14 @@ class AccountAndSubscriptionTests(unittest.TestCase):
         self.assertNotIn('name="calendar_event_type"', vp_only_page)
         self.assertNotIn(f'href="{CALENDAR_PUBLIC_URL}"', vp_only_page)
 
-    def test_forced_pin_change_opens_centered_modal_and_allows_explicit_close(self):
+    def test_forced_pin_change_opens_centered_modal_without_close_button(self):
         page = render_subscriptions(
             self.alice, ["11"], ("11",), {"11": []}, {"11": set()},
             NotifySettings(), [], "csrf", "https://ntfy.invalid",
             can_change_pin=True, force_pin_change=True,
         )
         self.assertIn('data-force-pin-change="1"', page)
-        self.assertIn('data-pin-modal-close', page)
+        self.assertNotIn('type="button" data-pin-modal-close', page)
         self.assertIn("showModal", page)
         self.assertIn("window.history.replaceState", page)
 
@@ -289,7 +385,7 @@ class AccountAndSubscriptionTests(unittest.TestCase):
     def test_ntfy_history_is_limited_by_server_cache_duration(self):
         ntfy_config = (Path(__file__).resolve().parent.parent / "ntfy/server.yml").read_text(encoding="utf-8")
         main_module = (Path(__file__).resolve().parent.parent / "main.py").read_text(encoding="utf-8")
-        self.assertIn('cache-duration: "24h"', ntfy_config)
+        self.assertIn('cache-duration: "23h"', ntfy_config)
         self.assertNotIn("cleanup_ntfy_history_once_per_day", main_module)
         self.assertNotIn("DELETE FROM messages", main_module)
 
@@ -828,11 +924,11 @@ class AccountAndSubscriptionTests(unittest.TestCase):
         empty_plan = SimpleNamespace(datum=date(2026, 8, 20), zeitstempel=None, zeitplan={}, klassen={})
 
         self.assertEqual(notifier.poll_once(empty_plan, datetime(2026, 8, 20, 15, 59)), 0)
-        self.assertEqual(notifier.poll_once(empty_plan, datetime(2026, 8, 20, 16, 0)), 3)
+        self.assertEqual(notifier.poll_once(empty_plan, datetime(2026, 8, 20, 16, 0)), 1)
         messages = "\n".join(message for _title, message in published)
         self.assertNotIn("Alte Aufgabe", messages)
-        self.assertIn("Heute fällig", messages)
-        self.assertIn("Morgen fällig", messages)
+        self.assertNotIn("Heute fällig", messages)
+        self.assertNotIn("Morgen fällig", messages)
         self.assertIn("Übermorgen fällig", messages)
         self.assertNotIn("Zu weit weg", messages)
 

@@ -1,3 +1,4 @@
+import RequiredPin from '../components/RequiredPin';
 import { useState, useEffect, FormEvent } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { checkUser, loginUser, loginWithSessionToken, fetchCurrentSession, hasActiveSession, logoutSession, saveUserSettings } from '../lib/api';
@@ -368,6 +369,8 @@ export default function UserDashboard() {
   };
 
   if (!user) return null;
+
+  if (!user.hasPin || user.preferences.forcePinChange) return <RequiredPin preferences={user.preferences} />;
 
   return (
     <CalendarView

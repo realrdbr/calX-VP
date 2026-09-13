@@ -1,0 +1,27 @@
+services:
+  database:
+    image: mariadb:11.4
+    environment:
+      MYSQL_ROOT_PASSWORD: regression-only-password
+      MYSQL_DATABASE: regression
+    healthcheck:
+      test: [CMD, healthcheck.sh, --connect, --innodb_initialized]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+  tester:
+    image: node:22-slim
+    working_dir: /work
+    volumes:
+      - ..:/work:ro
+      - /dev/null:/work/.env:ro
+    environment:
+      CAL11_SQL_INTEGRATION: '1'
+      DB_HOST: database
+      DB_NAME: regression
+      DB_USER: root
+      DB_PASSWORD: regression-only-password
+    command: node_modules/.bin/tsx --test tests/sql-privacy-pin.test.ts
+    depends_on:
+      database:
+        condition: service_healthy

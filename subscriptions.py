@@ -11,6 +11,7 @@ import hashlib
 import logging
 import re
 from typing import Iterable
+from time import monotonic
 from urllib.parse import quote
 
 import requests
@@ -451,17 +452,10 @@ class SubscriptionNotifier:
 
     @classmethod
     def _calendar_notification_is_due(cls, event: CalendarEvent, settings: NotifySettings, now: datetime) -> bool:
-        event_date = date.fromisoformat(event.date)
-        today = now.date()
-        days_before = cls._calendar_days_before(event, settings)
-        if event_date < today:
-            return False
-        if event_date > today + timedelta(days=days_before):
-            return False
         notify_at = cls._calendar_notification_at(event, settings)
-        if notify_at.date() >= today:
-            return now >= notify_at
-        return now.time() >= cls._calendar_notification_time(event, settings)
+        # A short retry window tolerates polling/network delays without backfilling
+        # old reminders on later days after an outage or a changed subscription.
+        return notify_at <= now <= notify_at + timedelta(minutes=20)
 
     @staticmethod
     def _calendar_message(event: CalendarEvent) -> tuple[str, str]:
@@ -486,6 +480,7 @@ class SubscriptionNotifier:
         day_before_plan: object | None = None,
     ) -> int:
         self.delivery_errors.clear()
+        poll_started = monotonic()
         now = now or datetime.now()
         emit("ntfy.poll", level=logging.DEBUG, local_now=now.isoformat(), plan_date=str(getattr(plan, "datum", None)))
         plan_date = getattr(plan, "datum", None) or now.date()
@@ -516,7 +511,6 @@ class SubscriptionNotifier:
             # VP-only accounts intentionally have no calendar access and must
             # never receive calendar-derived notifications, even if an old DB
             # still contains stale calendar notification settings for them.
-            calendar_events = [] if user.vp_only else self.store.get_calendar_events(user.username)
             has_subject_selection = any(recipient.subject_selections.values())
             if settings.lesson_notifications_enabled and has_subject_selection:
                 raw_times = settings.lesson_notification_times or DEFAULT_LESSON_NOTIFICATION_TIMES
@@ -577,11 +571,28 @@ class SubscriptionNotifier:
                         )
             if not user.vp_only and settings.calendar_notifications_enabled and settings.calendar_notification_types:
                 selected_types = set(settings.calendar_notification_types)
-                for event in calendar_events:
+                for event in self.store.get_calendar_events(user.username):
                     if not self._event_matches_recipient(recipient, event, selected_types):
                         continue
                     if not self._calendar_notification_is_due(event, settings, now):
                         continue
+                    # Re-read after other deliveries: deleted/edited events and changed
+                    # subscriptions must never be sent from this poll's earlier snapshot.
+                    current_recipient = next((item for item in self.store.notification_recipients(user.username) if item.user.id == user.id), None)
+                    if current_recipient is None or current_recipient.user.vp_only:
+                        continue
+                    current_settings = current_recipient.notify_settings
+                    if not current_settings.calendar_notifications_enabled:
+                        continue
+                    current_event = next((item for item in self.store.get_calendar_events(user.username) if item.id == event.id), None)
+                    if current_event is None or not self._event_matches_recipient(current_recipient, current_event, set(current_settings.calendar_notification_types)):
+                        continue
+                    delivery_now = now + timedelta(seconds=monotonic() - poll_started)
+                    if not self._calendar_notification_is_due(current_event, current_settings, delivery_now):
+                        continue
+                    event = current_event
+                    settings = current_settings
+                    user = current_recipient.user
                     title, message = self._calendar_message(event)
                     days_before = self._calendar_days_before(event, settings)
                     notification_time = self._calendar_notification_time(event, settings).strftime("%H:%M")
