@@ -458,7 +458,7 @@ class SubscriptionNotifier:
         return notify_at <= now <= notify_at + timedelta(minutes=20)
 
     @staticmethod
-    def _calendar_message(event: CalendarEvent) -> tuple[str, str]:
+    def _calendar_message(event: CalendarEvent, completed: bool = False) -> tuple[str, str]:
         title = f"(VPrintfy) Kalender: {event.title}"
         when = event.date
         if event.start_time:
@@ -469,6 +469,9 @@ class SubscriptionNotifier:
         if event.description:
             lines.append("")
             lines.append(event.description)
+        if completed:
+            title = "Erledigt – " + title
+            lines.insert(0, "Erledigt")
         return title, "\n".join(lines)
 
     def poll_once(
@@ -593,7 +596,7 @@ class SubscriptionNotifier:
                     event = current_event
                     settings = current_settings
                     user = current_recipient.user
-                    title, message = self._calendar_message(event)
+                    title, message = self._calendar_message(event, self.store.is_calendar_event_completed(user.username, event.id))
                     days_before = self._calendar_days_before(event, settings)
                     notification_time = self._calendar_notification_time(event, settings).strftime("%H:%M")
                     sent += self._deliver(

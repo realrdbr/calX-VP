@@ -18,7 +18,7 @@ Die Python-App nutzt dieselbe Datenbank wie der Kalender. VP-spezifische Tabelle
 ## 2) Projekt holen
 
 ```bash
-git clone https://github.com/realrdbr/modern-calendar---modern-VPMobil-GUI.git vpcal
+git clone https://github.com/realrdbr/calX-VP vpcal
 cd vpcal
 ```
 

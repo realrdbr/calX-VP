@@ -1,0 +1,16 @@
+# Public edge proxy: incoming forwarding headers are not trusted.
+entryPoints:
+  web:
+    address: ":80"
+    forwardedHeaders:
+      insecure: false
+      trustedIPs: []
+  websecure:
+    address: ":443"
+    forwardedHeaders:
+      insecure: false
+      trustedIPs: []
+providers:
+  file:
+    filename: /etc/traefik/traefik-dynamic.yml
+# Add the letsencrypt resolver and its ACME contact/storage for your deployment.

@@ -1,3 +1,4 @@
+import { configureProxyTrust } from './server/proxyTrust';
 import { renderLegalText } from './server/legalText';
 import { permitsPinSetupRequest, requiresPersonalPin } from './server/pinPolicy';
 import legalDefaults from './public/legal-defaults.json';
@@ -137,6 +138,7 @@ async function deleteNtfyReader(username: string) {
 
 async function startServer() {
   const app = express();
+  await configureProxyTrust(app);
   app.disable('x-powered-by');
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -254,7 +256,7 @@ async function startServer() {
       const remainingSeconds = Math.ceil((attempt.lockUntil - Date.now()) / 1000);
       return { allowed: false, remainingSeconds };
     }
-    if (Date.now() >= attempt.lockUntil) {
+    if (attempt.lockUntil > 0 && Date.now() >= attempt.lockUntil) {
       failedLoginAttempts.delete(key);
     }
     return { allowed: true };

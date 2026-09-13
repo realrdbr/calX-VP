@@ -47,6 +47,8 @@ def main():
                 connection.execute(
                     "INSERT INTO calendar_events(id,title,date,end_date,course_id,type,description,author) VALUES (?,?,?,?,?,?,?,?)",
                     (key, key, day, day, "ALLGEMEIN", kind, "", "test"))
+        with store._connection() as connection:
+            connection.execute("INSERT INTO user_event_completions(username,event_id) VALUES ('check_user','exam')")
         settings = dict(lesson_notification_times=("07:00", "09:15"),
                         calendar_notifications_enabled=True, calendar_notification_types=("EXAM", "TASK"),
                         calendar_notification_times={"EXAM": "16:00", "TASK": "18:00"},
@@ -77,8 +79,10 @@ def main():
         messages = [json.loads(line) for line in response.text.splitlines()]
         assert len(messages) == 25, len(messages)
         titles = [m.get("title") for m in messages]
-        assert titles.count("(VPrintfy) Kalender: exam") == 1
+        assert titles.count("Erledigt – (VPrintfy) Kalender: exam") == 1
         assert titles.count("(VPrintfy) Kalender: task") == 1
+        exam = next(m for m in messages if m.get('title', '').startswith('Erledigt'))
+        assert exam['message'].startswith('Erledigt\n')
         assert titles.count("(VPrintfy) Heute") == 1
         assert titles.count("(VPrintfy) Morgen") == 1
         assert titles.count("(VPrintfy) Nächster Raum: 102") == 1

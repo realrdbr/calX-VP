@@ -69,6 +69,29 @@ class AccountAndSubscriptionTests(unittest.TestCase):
         self.assertNotIn("Alte allgemeine Version", notifier._publish.call_args.args[1])
         self.assertEqual(notifier.poll_once(plan, datetime(2026, 8, 20, 16, 1)), 0)
 
+    def test_completion_notification_is_personal_and_undo_is_respected(self):
+        with self.store._connection() as connection:
+            connection.execute("INSERT INTO calendar_events(id,title,date,course_id,type) VALUES ('done','Aufgabe','2026-08-21','ALLGEMEIN','HAUSAUFGABE')")
+            connection.execute("INSERT INTO user_event_completions(username,event_id) VALUES ('alice','done')")
+        settings = NotifySettings(calendar_notifications_enabled=True, calendar_notification_time="16:00", calendar_notification_days_before=1, calendar_notification_types=("HAUSAUFGABE",))
+        for user in (self.alice, self.bob):
+            self.store.save_notify_settings(user.id, settings)
+        notifier = SubscriptionNotifier(self.store, "https://ntfy.invalid")
+        notifier._publish = Mock()
+        plan = SimpleNamespace(datum=date(2026, 8, 20), zeitstempel=None, zeitplan={}, klassen={})
+        self.assertEqual(notifier.poll_once(plan, datetime(2026, 8, 20, 16)), 2)
+        messages = {call.args[0].username: call.args for call in notifier._publish.call_args_list}
+        self.assertTrue(messages['alice'][1].startswith('Erledigt'))
+        self.assertTrue(messages['alice'][2].startswith('Erledigt'))
+        self.assertFalse(messages['bob'][1].startswith('Erledigt'))
+        self.assertFalse(messages['bob'][2].startswith('Erledigt'))
+        with self.store._connection() as connection:
+            connection.execute("DELETE FROM user_event_completions WHERE username = 'alice'")
+            connection.execute("DELETE FROM notification_deliveries")
+        notifier._publish.reset_mock()
+        self.assertEqual(notifier.poll_once(plan, datetime(2026, 8, 20, 16, 1)), 2)
+        self.assertTrue(all(not call.args[2].startswith('Erledigt') for call in notifier._publish.call_args_list))
+
     def test_calendar_is_revalidated_before_delivery(self):
         for change in ("deleted", "soft_deleted", "moved", "course", "disabled", "edited"):
             with self.subTest(change=change):

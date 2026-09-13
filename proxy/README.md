@@ -30,7 +30,26 @@ Compose fixes server-side delivery to `http://ntfy-delivery` on the separate int
 
 For nginx, the calendar vhost in [nginx.conf](/home/rdbr/PycharmProjects/jahrgangskalender/proxy/nginx.conf) already includes upload-safe settings for `/api/upload` (`client_max_body_size 15m`, `proxy_request_buffering off`). Keep this when adjusting templates, otherwise uploads can fail with HTTP 413.
 
-The application backend now trusts `X-Forwarded-For` only from configured trusted proxies (env `TRUSTED_PROXIES`, default `127.0.0.1,::1`; CIDR ranges are supported). When the app runs in Docker and the reverse proxy connects via the container's published port, the peer address is the Docker bridge gateway, not `127.0.0.1` — set `TRUSTED_PROXIES` to that gateway/subnet (e.g. `172.16.0.0/12`, check with `docker network inspect`) so real client IPs are logged instead of the proxy's.
+Kalender und VP lesen `TRUSTED_PROXIES`. Compose übergibt die Einstellung an beide
+Dienste und aktiviert `TRUST_DOCKER_GATEWAY`: Innerhalb der Container wird ausschließlich
+die konkrete IPv4-Standardgateway-Adresse aus der Routingtabelle vertraut. Damit
+funktioniert ein Host-nginx über die an Loopback gebundenen Docker-Ports, ohne pauschal
+private Netze freizugeben. Der optionale Caddy wird über `TRUSTED_PROXY_HOSTS=proxy`
+aufgelöst; seine konkreten Adressen werden regelmäßig aktualisiert. Für externe
+Proxycontainer eigene kontrollierte DNS-Namen oder exakte IPs eintragen.
+
+Alle Backend-Ports müssen von außen unzugänglich sein (`APP_BIND_HOST`, `VP_BIND_HOST`,
+`NTFY_BIND_HOST` jeweils `127.0.0.1`). Andernfalls kann bei Docker-Portweiterleitung
+die Herkunft eines direkten Aufrufs nicht sicher vom Hostproxy unterschieden werden.
+nginx, Caddy und Apache überschreiben eingehende Forwarding-Header. Traefik muss mit
+der ergänzten `traefik-static.yml` beziehungsweise deren `forwardedHeaders`-Einstellungen
+betrieben werden; `insecure` bleibt `false`, ohne pauschale `trustedIPs`. Bei einem
+zusätzlichen vorgeschalteten CDN sind dessen konkrete Vertrauensgrenzen gesondert
+zu konfigurieren; die Beispiele behandeln den direkt erreichbaren Edge-Proxy.
+
+Nach Änderungen Container neu erstellen und den tatsächlich installierten Hostproxy
+prüfen und neu laden. `.env` und Repositoryvorlagen aktualisieren keine außerhalb
+des Projekts liegende nginx-Konfiguration automatisch.
 
 The ntfy iOS flow still requires `upstream-base-url: "https://ntfy.sh"` in `ntfy/server.yml`, plus the user's ntfy credentials in the mobile app. The topic link opens the web view, but it does not carry authentication.
 
@@ -54,3 +73,57 @@ nginx instance, including authenticated JSON/SSE subscriptions and attempted
 `X-Forwarded-For` spoofing after the public rate limit has been exhausted. The
 test uses HTTP inside isolated Docker networks; production TLS certificates and
 the configuration actually installed on the server must be checked separately.
+
+
+Reproduzierbarer IP-Integrationstest (alle vier Beispielproxies, HTTP ohne echte Zertifikate):
+
+```sh
+.venv/bin/python tests/create_proxy_fixture.py
+docker compose -p cal11-proxy-check -f /tmp/cal11-proxy-check/compose.yml up --abort-on-container-exit --exit-code-from tester
+docker compose -p cal11-proxy-check -f /tmp/cal11-proxy-check/compose.yml down -v
+```
+
+Die produktiven Proxyregeln werden für den Test übernommen; nur TLS und Backendziele
+werden für das isolierte Netz angepasst. Geprüft werden Kalender, VP und der Notify-
+Routingpfad mit echten HTTP-Anfragen, gefälschten Headern und untrusted Direktzugriffen.
+Der eigentliche ntfy-Versand und seine ACLs werden separat durch `ntfy_end_to_end.py`
+geprüft. Die installierte nginx-Konfiguration auf einem anderen Server ist damit
+nicht automatisch aktualisiert oder geprüft.
+
+Vertiefter nginx-Test mit echten Anmeldeprotokollen und Brute-Force-Sperren:
+
+Voraussetzungen sind Linux mit Docker, freie Testports 39000–39003 und das freie
+Subnetz `172.30.247.0/24`, Python mit PyYAML sowie das gebaute VP-Image
+`jahrgangskalender-vp`. Der Test verwendet eine separate MariaDB mit Testkonten;
+die Projektdatei `.env` wird in den Testcontainern ausgeblendet.
+
+```sh
+npm run build
+.venv/bin/python tests/create_nginx_audit_fixture.py
+docker compose -p cal11-nginx-audit -f /tmp/cal11-nginx-audit/compose.yml up -d
+docker compose -p cal11-nginx-audit -f /tmp/cal11-nginx-audit/compose.yml exec -T client10 python /check/check.py
+docker compose -p cal11-nginx-audit -f /tmp/cal11-nginx-audit/compose.yml exec -T client11 python /check/check.py
+docker compose -p cal11-nginx-audit -f /tmp/cal11-nginx-audit/compose.yml exec -T client10 python /check/rate_limit.py blocked
+docker compose -p cal11-nginx-audit -f /tmp/cal11-nginx-audit/compose.yml exec -T client11 python /check/rate_limit.py allowed
+docker compose -p cal11-nginx-audit -f /tmp/cal11-nginx-audit/compose.yml exec -T nginx nginx -t
+docker compose -p cal11-nginx-audit -f /tmp/cal11-nginx-audit/compose.yml logs --no-color ntfy
+docker compose -p cal11-nginx-audit -f /tmp/cal11-nginx-audit/compose.yml down -v --timeout 1
+```
+
+Die Reihenfolge ist relevant; vor einer Wiederholung den Teststack mit `down -v`
+entfernen. nginx läuft im Hostnetz und erreicht die Anwendungen über an
+`127.0.0.1` gebundene Docker-Ports. Zwei Clients mit unterschiedlichen IPs prüfen
+erfolgreiche und fehlgeschlagene Anmeldungen, sechs Varianten gefälschter Header,
+die gespeicherten IPs in beiden Login-Tabellen sowie das nginx-Zugriffslog.
+Zusätzlich werden die Kalender-Sperre nach acht Fehlversuchen und die VP-Sperre
+nach fünf Fehlversuchen getestet: Auch eine korrekte PIN darf während der Sperre
+keine Sitzung erzeugen; ein anderer Client muss sich am selben Konto anmelden
+können. Die Sperren beziehen sich auf die Kombination Konto/IP, nicht auf eine
+pauschale IP-Sperre über alle Konten. Die ntfy-JSON-Logs müssen für die Testaufrufe
+`visitor_ip` mit `172.30.247.10` beziehungsweise `172.30.247.11` enthalten.
+
+Dieser Test reproduziert den Host-nginx/Loopback/Docker-Pfad ohne TLS. Für den
+Produktivbetrieb müssen die aktuelle Anwendung und Compose-Einstellungen sowie
+die nginx-Headerregeln tatsächlich übernommen, Container neu erstellt und nginx
+nach erfolgreichem `nginx -t` neu geladen werden. Ein zusätzlich vorgeschalteter
+Proxy oder ein CDN wird durch diesen Aufbau nicht abgedeckt.

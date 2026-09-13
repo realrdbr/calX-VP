@@ -389,6 +389,11 @@ class AccountStore:
                         deleted_at TEXT DEFAULT NULL,
                         PRIMARY KEY (user_id, event_key)
                     );
+                    CREATE TABLE IF NOT EXISTS user_event_completions (
+                        username TEXT NOT NULL COLLATE NOCASE,
+                        event_id TEXT NOT NULL,
+                        PRIMARY KEY (username, event_id)
+                    );
                     CREATE TABLE IF NOT EXISTS calendar_users (
                         username TEXT PRIMARY KEY COLLATE NOCASE,
                         courses TEXT NOT NULL,
@@ -1996,6 +2001,18 @@ class AccountStore:
             private = self._private_calendar(username).get("categories", [])
             options.extend(CalendarEventTypeOption(id=str(row["id"]), label=str(row["name"])) for row in private if row.get("id") and row.get("name"))
         return options
+
+    def is_calendar_event_completed(self, username: str, event_id: str) -> bool:
+        with self._connection() as connection:
+            try:
+                return self._fetchone(connection,
+                    "SELECT 1 FROM user_event_completions WHERE LOWER(username) = LOWER(?) AND event_id = ?",
+                    (username, event_id)) is not None
+            except Exception as error:
+                # Old calendar releases do not yet have personal completion data.
+                if self._backend == "mysql" and getattr(error, "args", (None,))[0] == 1146:
+                    return False
+                raise
 
     def get_calendar_events(self, username: str | None = None) -> list[CalendarEvent]:
         with self._connection() as connection:

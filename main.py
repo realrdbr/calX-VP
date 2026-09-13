@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from proxy_trust import client_ip, extra_trusted_addresses
+
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 import ipaddress
@@ -81,7 +83,7 @@ def _is_trusted_proxy(ip_str: str) -> bool:
         address = ipaddress.ip_address(ip_str)
     except ValueError:
         return False
-    return any(address in network for network in TRUSTED_PROXIES)
+    return any(address in network for network in TRUSTED_PROXIES) or str(address) in extra_trusted_addresses()
 
 
 def session_cookie_headers(token: str, max_age: int) -> list[str]:
@@ -228,21 +230,7 @@ class AppRequestHandler(BaseHTTPRequestHandler):
         return None
 
     def _client_ip(self) -> str:
-        # X-Forwarded-For nur vertrauen, wenn die Verbindung direkt vom
-        # konfigurierten Reverse Proxy (z.B. nginx auf localhost) kommt.
-        peer_ip = self.client_address[0]
-        if not _is_trusted_proxy(peer_ip):
-            return peer_ip
-        forwarded_for = self.headers.get("X-Forwarded-For", "")
-        candidates = [part.strip() for part in forwarded_for.split(",") if part.strip()]
-        for candidate in reversed(candidates):
-            if not _is_trusted_proxy(candidate):
-                try:
-                    ipaddress.ip_address(candidate)
-                except ValueError:
-                    continue
-                return candidate
-        return peer_ip
+        return client_ip(self.client_address[0], self.headers.get("X-Forwarded-For", ""), _is_trusted_proxy)
 
     def _post_data(self) -> dict[str, list[str]]:
         try:
