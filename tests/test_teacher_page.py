@@ -12,7 +12,7 @@ from teacher_page import (
 
 
 class TeacherPageTests(unittest.TestCase):
-    def test_missing_day_keeps_full_lesson_grid_and_shows_plan_notice(self):
+    def test_missing_day_keeps_full_lesson_grid_with_invisible_plan_placeholder(self):
         monday = date(2026, 8, 24)
         tuesday = date(2026, 8, 25)
         lesson = SimpleNamespace(
@@ -31,7 +31,8 @@ class TeacherPageTests(unittest.TestCase):
 
         html = render_teacher_week_table({monday: plan, tuesday: None}, "KÖN")
 
-        self.assertIn("Keine Plandaten vorhanden", html)
+        self.assertNotIn("Keine Plandaten vorhanden", html)
+        self.assertIn('style="visibility: hidden" aria-hidden="true"', html)
         self.assertIn("Planstand: 24.08.2026 06:30", html)
         self.assertEqual(html.count('class="period-head">'), 9)
         self.assertIn("25.08.", html)

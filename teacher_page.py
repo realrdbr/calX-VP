@@ -314,16 +314,13 @@ def render_teacher_week_table(
         today = date.today()
         head_class = ' class="day-head--today"' if today.weekday() < 5 and plan_date == today else ""
         day_plan = week_plans[plan_date]
-        if day_plan is None:
-            day_plan_info = "<small>Keine Plandaten vorhanden</small>"
+        timestamp = getattr(day_plan, "zeitstempel", None)
+        if timestamp is not None:
+            timestamp_text = timestamp.strftime("%d.%m.%Y %H:%M")
+            day_plan_info = f"<small>Planstand: {escape(timestamp_text)}</small>"
         else:
-            timestamp = getattr(day_plan, "zeitstempel", None)
-            timestamp_text = timestamp.strftime("%d.%m.%Y %H:%M") if timestamp is not None else "unbekannt"
-            if timestamp is not None or not "unbekannt":
-                timestamp_text = timestamp.strftime("%d.%m.%Y %H:%M")
-                day_plan_info = f"<small>Planstand: {escape(timestamp_text)}</small>"
-            else:
-                day_plan_info = "<small>Plan nicht verfügbar</small>"
+            # Reserve the same wrapping/height without displaying a missing-plan notice.
+            day_plan_info = '<small style="visibility: hidden" aria-hidden="true">Planstand: 00.00.0000 00:00</small>'
 
         header_cells.append(f"""
             <th{head_class} data-plan-date="{plan_date.isoformat()}">
@@ -805,7 +802,7 @@ def render_teacher_page(
             border: 1px solid var(--border);
             border-radius: 50%;
             background: var(--surface-muted);
-            color: var(--muted);
+            color: var(--primary);
             font-size: 0.68rem;
             font-weight: 900;
             font-style: italic;
@@ -1054,6 +1051,16 @@ def render_teacher_page(
             document.querySelectorAll("details.week-lesson").forEach(details => {{
                 const originalParent = details.parentNode;
                 const originalNextSibling = details.nextSibling;
+
+                if (details.classList.contains("day-info-marker")) {{
+                    originalParent.style.cursor = "pointer";
+                    originalParent.addEventListener("click", event => {{
+                        if (event.target.closest("details")) return;
+                        // Keep the document's outside-click handler from closing it immediately.
+                        event.stopPropagation();
+                        details.open = !details.open;
+                    }});
+                }}
 
                 details.addEventListener("toggle", () => {{
                     details.classList.remove("popup-open-up", "popup-open-left", "popup-fixed");
