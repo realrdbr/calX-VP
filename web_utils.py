@@ -608,6 +608,9 @@ html[data-theme="light"] {
 body {
     margin: 0;
     min-height: 100vh;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
     background: var(--background);
     color: var(--text);
     font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -615,6 +618,7 @@ body {
 
 main {
     width: min(1380px, calc(100% - 32px));
+    flex: 1 0 auto;
     margin: 0 auto;
     padding: 20px 0 32px;
 }

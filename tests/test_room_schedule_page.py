@@ -49,7 +49,8 @@ def test_room_page_reuses_table_and_includes_rooms_from_next_normal_week():
     assert html.count('class="period-head">') == 9
     assert 'Tagesinfo &lt;sicher&gt;' in html
     assert '/raeume?woche=' in unescape(html)
-    assert 'role="switch"' in html
+    assert 'Freie Räume' in html
+    assert '<div class="room-view-switch"><a ' in html
 
 
 def test_room_labels_are_escaped_and_urls_encoded():
@@ -65,10 +66,9 @@ def test_room_labels_are_escaped_and_urls_encoded():
 
 def test_free_room_switch_stays_on_same_route_and_keeps_free_mode_on_submit():
     html = render_rooms_page(DAY, 1, [101])
-    assert 'action="/raeume"' in html
-    assert 'name="frei" value="1" checked' in html
-    assert '<input type="hidden" name="frei" value="1">' in html
-    assert 'name="woche"' in html
+    assert 'href="/raeume?woche=2026-W38"' in html
+    assert '>Raumplan</a>' in html
+    assert '<div class="room-view-switch"><a ' in html
 
 
 def test_missing_next_week_does_not_hide_existing_room_schedule():

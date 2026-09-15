@@ -57,18 +57,21 @@ def room_table_plans(week):
 
 
 def room_view_switch(selected_date, selected_room=None, *, free=False):
-    fields = {'woche': format_week_value(selected_date)} if free else {'datum': selected_date.isoformat(), 'stunde': '1'}
+    fields = {'woche': format_week_value(selected_date)} if free else {
+        'frei': '1', 'datum': selected_date.isoformat(), 'stunde': '1',
+    }
     if free and selected_room:
         fields['raum'] = selected_room
-    hidden = ''.join(f'<input type="hidden" name="{key}" value="{escape(value, quote=True)}">' for key, value in fields.items())
+    target = '/raeume?' + urlencode(fields)
+    label = 'Raumplan' if free else 'Freie Räume'
     return f'''<style>
       .room-view-switch {{ margin: 12px 0; }}
-      .room-view-switch label {{ display: inline-flex; align-items: center; gap: 10px;
-        padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px;
-        background: var(--surface-muted); color: var(--text); cursor: pointer; font-weight: 700; }}
-      .room-view-switch label:hover {{ background: var(--surface); border-color: var(--primary); }}
-      .room-view-switch label:has(input:focus-visible) {{ outline: 2px solid var(--primary); outline-offset: 3px; }}
-      .room-toolbar {{ display: grid; grid-template-columns: minmax(0, 1fr) 200px auto auto; column-gap: 12px; align-items: center; margin-bottom: 12px; }}
+            .room-view-switch a {{ display: inline-flex; align-items: center; justify-content: center;
+                padding: 10px 14px; border: 1px solid var(--primary); border-radius: 8px;
+                background: var(--surface-muted); color: var(--text); font-weight: 700; text-decoration: none; }}
+            .room-view-switch a:hover {{ background: var(--surface); border-color: var(--primary); }}
+            .room-view-switch a:focus-visible {{ outline: 2px solid var(--primary); outline-offset: 3px; }}
+    .room-toolbar {{ display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; column-gap: 12px; align-items: center; margin-bottom: 12px; }}
       .room-toolbar > .room-view-switch {{ grid-column: 2; grid-row: 1; z-index: 1; margin: 0; }}
       .room-toolbar > .class-message {{ grid-column: 1 / -1; grid-row: 1; display: grid;
         grid-template-columns: subgrid; align-items: center; margin-bottom: 0; }}
@@ -78,13 +81,13 @@ def room_view_switch(selected_date, selected_room=None, *, free=False):
       .free-room-controls {{ display: grid; grid-template-columns: minmax(160px, 1fr) minmax(100px, 1fr) 170px 184px;
         gap: 12px; align-items: end; width: 100%; min-width: 0; }}
       .free-room-controls > .room-view-switch {{ margin: 0; grid-column: 4; transform: translateY(1px); }}
-      .free-room-controls > .room-view-switch label {{ width: 100%; justify-content: center;
+            .free-room-controls > .room-view-switch a {{ width: 100%; justify-content: center;
         height: 40px; min-height: 40px; padding: 0 12px; border-radius: 6px; box-sizing: border-box; }}
       .free-room-controls > .form-row {{ margin: 0; display: grid; grid-column: 1 / 4; grid-template-columns: subgrid; }}
       .free-room-controls > .form-row > button {{ width: 100%; height: 38px; min-height: 38px; }}
       @media (max-width: 1000px) {{
         .room-toolbar {{ display: flex; flex-direction: column; align-items: stretch; gap: 12px; }}
-        .room-toolbar > .room-view-switch, .room-toolbar > .room-view-switch label {{ width: 100%; box-sizing: border-box; }}
+        .room-toolbar > .room-view-switch, .room-toolbar > .room-view-switch a {{ width: 100%; box-sizing: border-box; }}
         .room-toolbar > .class-message {{ display: flex; flex-wrap: wrap; }}
       }}
       @media (max-width: 1000px) {{
@@ -92,17 +95,12 @@ def room_view_switch(selected_date, selected_room=None, *, free=False):
         .free-room-controls > .form-row {{ grid-column: 1; grid-template-columns: repeat(2, minmax(0, 1fr)); }}
         .free-room-controls > .form-row > button {{ grid-column: 1 / -1; }}
         .free-room-controls > .room-view-switch {{ grid-column: 1; width: 100%; transform: none; }}
-        .free-room-controls > .room-view-switch label {{ height: 40px; min-height: 40px; }}
+        .free-room-controls > .room-view-switch a {{ height: 40px; min-height: 40px; }}
       }}
       @media (max-width: 620px) {{
         .free-room-controls > .form-row {{ grid-template-columns: minmax(0, 1fr); }}
       }}
-      .room-view-switch input[type=checkbox] {{ accent-color: var(--primary); color-scheme: inherit;
-        width: 18px; height: 18px; flex: 0 0 18px; margin: 0; padding: 0; cursor: pointer; }}
-    </style><form action="/raeume" method="get" class="room-view-switch">
-        <label><input type="checkbox" role="switch" name="frei" value="1" {'checked' if free else ''}
-        onchange="this.form.requestSubmit()"> Freie Räume</label>{hidden}
-        <noscript><button type="submit">Ansicht wechseln</button></noscript></form>'''
+    </style><div class="room-view-switch"><a href="{escape(target, quote=True)}">{label}</a></div>'''
 
 
 def render_room_schedule_page(selected_date, selected_room=None, *, block_mode=False, error_message=None, **flags):
