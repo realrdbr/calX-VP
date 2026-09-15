@@ -1,4 +1,5 @@
 import LegalLinks from './LegalLinks';
+import { weekEventSegment, weekEventIsAllDay, intervalLanes } from '../lib/weekEventSegment';
 import { useState, useEffect, useMemo, useRef, MouseEvent, TouchEvent } from 'react';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, addMonths, subMonths, addWeeks, subWeeks, startOfWeek, endOfWeek, isSameMonth, getISOWeek } from 'date-fns';
 import { de } from 'date-fns/locale';
@@ -494,7 +495,13 @@ export default function CalendarView({ user, onUpdatePreferences, isInitialSetup
   });
 
   const abWeek = getISOWeek(currentDate) % 2 === 0 ? 'A-Woche' : 'B-Woche';
-  const WEEK_HOURS = ['07:00', '08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00', '19:00', '20:00', '21:00', '22:00'];
+  const WEEK_HOURS = Array.from({ length: 24 }, (_, hour) => `${String(hour).padStart(2, '0')}:00`);
+  const weekDays = calendarDays.slice(0, 7);
+  const allDayBars = intervalLanes<{ event: AppEvent; start: number; end: number }>(events.flatMap(event => {
+    const days = weekDays.flatMap((day, index) => weekEventIsAllDay(event, format(day, 'yyyy-MM-dd')) ? [index] : []);
+    return days.length ? [{ event, start: days[0], end: days[days.length - 1] + 1 }] : [];
+  }));
+  const allDayHeight = Math.max(48, ...allDayBars.map(bar => (bar.lane + 1) * 44 + 8));
   
   return (
     <div className={`fixed inset-0 flex h-[100dvh] max-h-[100dvh] overflow-hidden ${theme.bgApp} ${theme.textMain}`}>
@@ -719,94 +726,66 @@ export default function CalendarView({ user, onUpdatePreferences, isInitialSetup
                 })}
               </div>
 
-              {/* Section: Ganztägige Termine */}
-              <div className={`calendar-week-row grid border-b ${theme.border} ${theme.bgSidebar} min-h-[48px]`}>
-                <div className={`p-2 border-r ${theme.border} text-[10px] font-bold ${theme.textFaint} flex items-center justify-center text-center uppercase tracking-wider`}>
+              {/* One continuous bar per event across its visible all-day dates. */}
+              <div className={`calendar-week-row grid border-b ${theme.border} ${theme.bgSidebar}`} style={{ minHeight: allDayHeight }}>
+                <div style={{ gridColumn: 1, gridRow: 1 }} className={`p-2 border-r ${theme.border} text-[10px] font-bold ${theme.textFaint} flex items-center justify-center uppercase`}>
                   Ganztägig
                 </div>
-                {calendarDays.slice(0, 7).map((day) => {
-                  const dayEvents = events.filter(e => {
-                    if (e.startTime) return false;
-                    const start = new Date(e.date);
-                    start.setHours(0,0,0,0);
-                    const end = e.endDate ? new Date(e.endDate) : new Date(start);
-                    end.setHours(23,59,59,999);
-                    const current = new Date(day);
-                    current.setHours(12,0,0,0);
-                    return current >= start && current <= end;
-                  });
-
-                  return (
-                    <div
-                      key={`all-day-${day.toISOString()}`}
-                      onClick={() => openNewEventModal(day)}
-                      className={`p-1 border-r ${theme.border} space-y-1 cursor-pointer min-h-[44px] hover:bg-black/5 dark:hover:bg-white/5 transition-colors`}
-                    >
-                      {dayEvents.map(e => (
-                        <div
-                          key={e.id}
-                          onClick={(ev) => openEditEventModal(e, ev)}
-                          className="relative min-w-0 overflow-hidden rounded-sm border border-black/10 px-1.5 py-1 text-xs cursor-pointer flex flex-col justify-center leading-tight"
-                          style={getEventCardStyle(e)}
-                          title={`${e.title} (${getCourseName(e.courseId)})`}
-                        >
-                          <CompletionMark completed={e.completed} />
-                          <span className="font-bold truncate">{e.title}</span>
-                          <span className="opacity-90 text-[10px] truncate">{getCourseName(e.courseId)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  );
-                })}
+                {weekDays.map((day, index) => (
+                  <div key={day.toISOString()} style={{ gridColumn: index + 2, gridRow: 1 }}
+                    onClick={() => openNewEventModal(day)}
+                    className={`border-r ${theme.border} cursor-pointer hover:bg-black/5 dark:hover:bg-white/5`} />
+                ))}
+                {allDayBars.map(({ event, start, end, lane }) => (
+                  <div key={event.id} onClick={ev => openEditEventModal(event, ev)}
+                    className="relative z-[1] min-w-0 overflow-hidden rounded-sm border border-black/10 px-1.5 py-1 text-xs cursor-pointer flex flex-col justify-center leading-tight mx-1"
+                    style={{ ...getEventCardStyle(event), gridColumn: `${start + 2} / ${end + 2}`, gridRow: 1,
+                      alignSelf: 'start', marginTop: lane * 44 + 4, height: 40 }}
+                    title={`${event.title} (${getCourseName(event.courseId)})`}>
+                    <CompletionMark completed={event.completed} />
+                    <span className="font-bold truncate">{event.title}</span>
+                    <span className="opacity-90 text-[10px] truncate">{getCourseName(event.courseId)}</span>
+                  </div>
+                ))}
               </div>
 
-              {/* Section: Hourly Timeline (07:00 - 22:00) */}
-              <div>
-                {WEEK_HOURS.map((hour) => {
-                  const hourNum = parseInt(hour.split(':')[0], 10);
-                  return (
-                    <div key={hour} className={`calendar-week-row grid border-b ${theme.border} min-h-[60px]`}>
-                      <div className={`p-1.5 border-r ${theme.border} ${theme.bgSidebar} text-xs font-mono font-bold ${theme.textFaint} flex items-start justify-center pt-2`}>
-                        {hour}
-                      </div>
-
-                      {calendarDays.slice(0, 7).map((day) => {
-                        const hourEvents = events.filter(e => {
-                          if (!e.startTime) return false;
-                          const eStart = new Date(e.date);
-                          if (!isSameDay(eStart, day)) return false;
-                          const eventHourNum = parseInt(e.startTime.split(':')[0], 10);
-                          return eventHourNum === hourNum;
-                        });
-
-                        return (
-                          <div
-                            key={`${day.toISOString()}-${hour}`}
-                            onClick={() => openNewEventModal(day, hour)}
-                            className={`p-1 border-r ${theme.border} space-y-1 cursor-pointer hover:bg-black/5 dark:hover:bg-white/5 transition-colors relative min-h-[56px]`}
-                          >
-                            {hourEvents.map(e => (
-                              <div
-                                key={e.id}
-                                onClick={(ev) => openEditEventModal(e, ev)}
-                                className="relative min-w-0 overflow-hidden rounded-sm p-1.5 text-xs cursor-pointer flex flex-col justify-center leading-tight border border-black/10"
-                                style={getEventCardStyle(e)}
-                                title={`${e.title} (${getCourseName(e.courseId)}) - ${e.startTime}${e.endTime ? ` bis ${e.endTime}` : ''}`}
-                              >
-                                <CompletionMark completed={e.completed} />
-                                <div className="flex flex-wrap items-center justify-between text-xs font-semibold opacity-95 mb-0.5">
-                                  <span>{e.startTime}{e.endTime ? ` – ${e.endTime}` : ''} Uhr</span>
-                                </div>
-                                <span className="font-bold truncate text-[13px]">{e.title}</span>
-                                <span className="opacity-90 text-[11px] truncate">{getCourseName(e.courseId)}</span>
-                              </div>
-                            ))}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  );
-                })}
+              {/* Fixed-height rows provide a minute-accurate 00:00–24:00 timeline. */}
+              <div className="relative">
+                {WEEK_HOURS.map(hour => (
+                  <div key={hour} className={`calendar-week-row grid border-b ${theme.border}`} style={{ height: 60 }}>
+                    <div className={`p-1.5 border-r ${theme.border} ${theme.bgSidebar} text-xs font-mono font-bold ${theme.textFaint} text-center`}>{hour}</div>
+                    {weekDays.map(day => (
+                      <div key={day.toISOString()} onClick={() => openNewEventModal(day, hour)}
+                        className={`border-r ${theme.border} cursor-pointer hover:bg-black/5 dark:hover:bg-white/5`} />
+                    ))}
+                  </div>
+                ))}
+                <div className="calendar-week-row grid absolute inset-0 pointer-events-none">
+                  <div />
+                  {weekDays.map(day => {
+                    const segments = intervalLanes<{ event: AppEvent; segment: NonNullable<ReturnType<typeof weekEventSegment>>; start: number; end: number }>(events.flatMap(event => {
+                      const segment = weekEventSegment(event, format(day, 'yyyy-MM-dd'));
+                      return segment ? [{ event, segment, start: segment.startMinute, end: segment.endMinute }] : [];
+                    }));
+                    return <div key={day.toISOString()} className="relative min-w-0">
+                      {segments.map(({ event, segment, start, end, lane, laneCount }) => (
+                        <div key={event.id} onClick={ev => openEditEventModal(event, ev)}
+                          className="absolute pointer-events-auto min-w-0 overflow-hidden rounded-sm px-1.5 text-xs cursor-pointer flex flex-col leading-tight border border-black/10"
+                          style={{ ...getEventCardStyle(event), top: start, height: end - start,
+                            left: `calc(${lane * 100 / laneCount}% + 2px)`, width: `calc(${100 / laneCount}% - 4px)` }}
+                          title={`${event.title} (${getCourseName(event.courseId)}) - ${segment.label}`}>
+                          <CompletionMark completed={event.completed} />
+                          <span className="text-xs font-semibold opacity-95">{segment.label}</span>
+                          <span className="font-bold truncate text-[13px]">{event.title}</span>
+                          <span className="opacity-90 text-[11px] truncate">{getCourseName(event.courseId)}</span>
+                        </div>
+                      ))}
+                    </div>;
+                  })}
+                </div>
+              </div>
+              <div className={`calendar-week-row grid ${theme.bgSidebar}`}>
+                <div className={`text-center text-xs font-mono ${theme.textFaint}`}>24:00</div>
               </div>
             </div>
           ) : (

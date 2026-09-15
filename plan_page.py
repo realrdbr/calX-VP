@@ -1,3 +1,4 @@
+from school_calendar import school_week, adjacent_school_week
 from lesson_status import is_cancelled, detail_signature, has_value
 import json
 import re
@@ -496,9 +497,9 @@ def get_latest_timestamp_text(week_plans: dict[date, object | None]) -> str:
 def render_week_navigation(selected_date: date, selected_class: str | None, filters_active: bool = True, block_mode: bool = False) -> str:
     """Rendert die Navigation für die vorherige und nächste Schulwoche."""
 
-    previous_week = selected_date - timedelta(days=7)
-    next_week = selected_date + timedelta(days=7)
-    current_week = date.today() - timedelta(days=date.today().weekday())
+    previous_week = adjacent_school_week(selected_date, -1)
+    next_week = adjacent_school_week(selected_date)
+    current_week = school_week(date.today())
     selected_week = selected_date - timedelta(days=selected_date.weekday())
     is_current_week = selected_week == current_week
     query_values = ({'klasse': selected_class} if selected_class else {})
@@ -853,9 +854,9 @@ def render_plan_page(
             gap: 2px;
             min-height: 58px;
             padding: 7px;
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            background: var(--surface);
+            border: 0;
+            border-radius: 0;
+            background: transparent;
             list-style: none;
         }}
 
@@ -1034,7 +1035,7 @@ def render_plan_page(
             .week-lesson summary {{
                 min-height: 48px;
                 padding: 5px;
-                border-radius: 8px;
+                border-radius: 0;
             }}
 
             .day-info-marker summary {{
@@ -1233,6 +1234,29 @@ def render_plan_page(
             document.querySelectorAll("details.week-lesson").forEach(details => {{
                 const originalParent = details.parentNode;
                 const originalNextSibling = details.nextSibling;
+                let popupScrollOrigin = null;
+                const scrollPosition = () => {{
+                    let x = window.scrollX, y = window.scrollY;
+                    for (let parent = originalParent; parent && parent !== document.body; parent = parent.parentElement) {{
+                        if (parent === document.scrollingElement) continue;
+                        x += parent.scrollLeft;
+                        y += parent.scrollTop;
+                    }}
+                    return {{ x, y }};
+                }};
+                document.addEventListener("scroll", () => {{
+                    if (!details.open || !popupScrollOrigin) return;
+                    const current = scrollPosition();
+                    const dx = current.x - popupScrollOrigin.x;
+                    const dy = current.y - popupScrollOrigin.y;
+                    details.style.setProperty("--popup-left", `${{popupScrollOrigin.left - dx}}px`);
+                    details.style.setProperty("--popup-top", `${{popupScrollOrigin.top - dy}}px`);
+                    if (details.parentNode === document.body) {{
+                        details.style.left = `${{popupScrollOrigin.markerLeft - dx}}px`;
+                        details.style.top = `${{popupScrollOrigin.markerTop - dy}}px`;
+                    }}
+                }}, true);
+
 
                 if (details.classList.contains("day-info-marker")) {{
                     originalParent.style.cursor = "pointer";
@@ -1250,6 +1274,7 @@ def render_plan_page(
                     details.style.removeProperty("--popup-top");
 
                     if (!details.open) {{
+                        popupScrollOrigin = null;
                         if (details.classList.contains("day-info-marker") && details.parentNode === document.body) {{
                             details.style.removeProperty("position");
                             details.style.removeProperty("top");
@@ -1320,6 +1345,8 @@ def render_plan_page(
                         details.classList.add("popup-fixed");
                         details.style.setProperty("--popup-left", `${{left}}px`);
                         details.style.setProperty("--popup-top", `${{top}}px`);
+                        popupScrollOrigin = {{ ...scrollPosition(), left, top,
+                            markerLeft: detailsRect.left, markerTop: detailsRect.top }};
                     }});
                 }});
             }});

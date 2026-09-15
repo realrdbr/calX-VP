@@ -438,3 +438,31 @@ Backups sind nur mit `./start-all --backups` beziehungsweise `./start-all -d --b
 `./start-all --restore backups/JJJJ-MM-TT/DATEI.tar.gz.enc` stellt eine Sicherung nach Bestätigung
 wieder her. Ohne `--backups` läuft kein Backup-Worker. Details und Schlüsselaufbewahrung:
 [Backups und Wiederherstellung](docs/backups.md).
+
+### Raumplan und freie Räume
+
+Der Navigationspunkt **Räume** öffnet unter `/raeume` einen Wochenplan mit Raumauswahl,
+Wochennavigation, optionaler Blockdarstellung sowie Tages- und Stundeninformationen.
+Die Auswahl enthält Räume aus der gewählten und der nächsten veröffentlichten Unterrichtswoche,
+einschließlich der normalen Stundenpläne. Tagespläne haben in der angezeigten Woche
+Vorrang; fehlende Tage werden wie beim Lehrerplan durch normale Stundenpläne ergänzt.
+Räume ohne Belegung in der angezeigten Woche behalten ein leeres Stundenraster.
+
+**Freie Räume** schaltet auf derselben Route zur bisherigen Suche nach Datum
+und Stunde um (`/raeume?frei=1`). Das Ausschalten führt innerhalb des Raumbereichs zum
+Wochenplan zurück. Die Raumauswahl wird getrennt von der Lehrerauswahl gespeichert.
+Bestehende Links mit `datum` und `stunde` funktionieren weiterhin als Freiraumsuche.
+Auch der Raumplan unterliegt der bestehenden Anmeldung und verpflichtenden PIN-Einrichtung.
+
+
+Die Wochennavigation von Vertretungs-, Lehrer- und Raumplan richtet sich nach dem
+Schulwochenindex `SPlanKl_Basis.xml` der Schule. Nicht gelistete Wochen werden
+übersprungen; direkte Wochenlinks werden auf die nächste gelistete Woche angepasst.
+An den Grenzen des veröffentlichten Index bleibt die Auswahl innerhalb dieses
+Zeitraums. Lehrer- und Raumkataloge verwenden ebenfalls die nächste Unterrichtswoche.
+Der Index wird fünf Minuten zwischengespeichert und lokal unter
+`.vp_cache/school-weeks.json` (bzw. `VPMOBIL_CACHE_DIR`) gesichert. Bei Abruffehlern
+bleibt der letzte gültige Index erhalten; ohne verfügbaren Index bleibt die bisherige
+Kalendernavigation aktiv. Fehlende Tagesdateien werden nicht als Ferien interpretiert.
+Teilweise unterrichtsfreie Wochen bleiben entsprechend der Veröffentlichung der Schule
+wählbar. Die Freiraumsuche nutzt einheitlich `/raeume?frei=1&datum=JJJJ-MM-TT&stunde=N`.

@@ -239,7 +239,7 @@ export default function EventModal({ isOpen, onClose, onSave, onDelete, initialD
                 <span>{date} {endDate && endDate !== date && `- ${endDate}`}</span>
                 {(startTime || endTime) && (
                   <span className={`text-sm font-semibold flex items-center gap-1.5 ${theme.textMain}`}>
-                    🕒 {startTime || '--:--'}{endTime ? ` – ${endTime}` : ''} Uhr
+                    {startTime || '--:--'}{endTime ? ` – ${endTime}` : ''} Uhr
                   </span>
                 )}
               </div>

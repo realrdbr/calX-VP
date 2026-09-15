@@ -57,10 +57,10 @@ def describe_room_plan(plan) -> str:
     if plan is None:
         return ""
     if hasattr(plan, "week_type"):
-        return "Grundlage: normaler Stundenplan. Für diesen Tag ist kein Tagesplan veröffentlicht."
+        return "Grundlage: normaler Stundenplan"
     timestamp = getattr(plan, "zeitstempel", None)
-    suffix = f" · Planstand: {timestamp:%d.%m.%Y %H:%M}" if timestamp is not None else ""
-    return "Grundlage: veröffentlichter Tagesplan" + suffix
+    suffix = f" {timestamp:%d.%m.%Y %H:%M}" if timestamp is not None else ""
+    return "Grundlage: Vertretungsplan" + suffix
 
 
 def get_room_quality(room: int) -> str:
@@ -155,6 +155,7 @@ def render_rooms_page(
     """Erzeugt die HTML-Seite für freie Räume."""
 
     room_cards = ""
+    from room_schedule_page import room_view_switch
 
     if free_rooms is not None:
         free_rooms = sort_rooms_by_quality(free_rooms)
@@ -334,7 +335,7 @@ def render_rooms_page(
     <main>
         <header class="topbar">
             <div class="brand">
-                <h1>Freie Räume</h1>
+                <h1>Raumplan</h1>
                 {render_vp_user_identity(session_username)}
             </div>
 
@@ -342,7 +343,9 @@ def render_rooms_page(
         </header>
 
         <section class="panel">
+            <div class="free-room-controls">
             <form method="get" action="/raeume" class="form-row">
+                <input type="hidden" name="frei" value="1">
                 <label>
                     Datum
                     <input type="date" name="datum" value="{selected_date.isoformat()}">
@@ -357,10 +360,9 @@ def render_rooms_page(
 
                 <button type="submit">Anzeigen</button>
             </form>
-
-            <div class="meta">
-                Räume werden farblich nach Qualität sortiert.
+            {room_view_switch(selected_date, free=True)}
             </div>
+
         </section>
 
         {result_block}

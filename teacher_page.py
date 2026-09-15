@@ -1,3 +1,4 @@
+from school_calendar import school_week, adjacent_school_week
 from lesson_status import is_cancelled, detail_signature, has_value
 import json
 from datetime import date, timedelta
@@ -259,7 +260,7 @@ def render_lesson_details(lesson) -> str:
     )
 
 
-def render_lesson_cell(lessons: list, period_labels: list[int] | None = None) -> str:
+def render_lesson_cell(lessons: list, period_labels: list[int] | None = None, *, show_teachers: bool = False) -> str:
     """Rendert eine Tabellenzelle."""
 
     if not lessons:
@@ -280,7 +281,7 @@ def render_lesson_cell(lessons: list, period_labels: list[int] | None = None) ->
                     <strong>{escape("-" if is_cancelled(lesson) else (lesson.fach or "-"))}</strong>
                     {period_label}
                     <span>{escape(format_tuple(lesson.klassen))}</span>
-                    <span>{escape(format_tuple(lesson.räume))}</span>
+                    <span>{escape(format_tuple(lesson.lehrer if show_teachers else lesson.räume))}</span>
                 </summary>
 
                 <div class="popup-content">
@@ -296,12 +297,14 @@ def render_teacher_week_table(
     week_plans: dict[date, object | None],
     selected_teacher: str,
     block_mode: bool = False,
+    show_empty: bool = False,
+    show_teachers: bool = False,
 ) -> str:
     """Rendert den Wochenplan eines Lehrers."""
 
     week_lessons = collect_teacher_lessons(week_plans, selected_teacher)
 
-    if not week_lessons:
+    if not week_lessons and not show_empty:
         return '<p class="empty">Für diesen Lehrer wurden in dieser Woche keine Stunden gefunden.</p>'
 
     dates = list(week_plans.keys())
@@ -350,7 +353,7 @@ def render_teacher_week_table(
                 elif lessons != second:
                     period_labels = [period] * len(lessons) + [period + 1] * len(second)
                     lessons = lessons + second
-            day_cells.append(f"<td>{render_lesson_cell(lessons, period_labels)}</td>")
+            day_cells.append(f"<td>{render_lesson_cell(lessons, period_labels, show_teachers=show_teachers)}</td>")
 
         rows.append(f"""
             <tr>
@@ -412,32 +415,32 @@ def get_week_version(week_plans: dict[date, object | None]) -> str:
     )
 
 
-def render_week_navigation(selected_date: date, selected_teacher: str | None, block_mode: bool = False) -> str:
+def render_week_navigation(selected_date: date, selected_teacher: str | None, block_mode: bool = False, *, route: str = "/lehrer", selection_key: str = "lehrer") -> str:
     """Rendert die Navigation für die vorherige und nächste Schulwoche."""
 
-    previous_week = selected_date - timedelta(days=7)
-    next_week = selected_date + timedelta(days=7)
-    current_week = date.today() - timedelta(days=date.today().weekday())
+    previous_week = adjacent_school_week(selected_date, -1)
+    next_week = adjacent_school_week(selected_date)
+    current_week = school_week(date.today())
     selected_week = selected_date - timedelta(days=selected_date.weekday())
     is_current_week = selected_week == current_week
-    query_values = ({'lehrer': selected_teacher} if selected_teacher else {})
+    query_values = ({selection_key: selected_teacher} if selected_teacher else {})
     if block_mode:
         query_values['block'] = '1'
     teacher_query = f"&{urlencode(query_values)}" if query_values else ""
 
     return f"""
         <div class="week-navigation" aria-label="Wochennavigation">
-            <a class="week-nav-button" href="/lehrer?woche={format_week_value(previous_week)}{teacher_query}" aria-label="Vorherige Woche">
+            <a class="week-nav-button" href="{route}?woche={format_week_value(previous_week)}{teacher_query}" aria-label="Vorherige Woche">
                 <svg class="week-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
                 <small>Zurück</small>
             </a>
 
-            <a class="week-nav-button {'week-nav-button--current' if is_current_week else ''}" href="/lehrer?woche={format_week_value(current_week)}{teacher_query}">
+            <a class="week-nav-button {'week-nav-button--current' if is_current_week else ''}" href="{route}?woche={format_week_value(current_week)}{teacher_query}">
                 <svg class="week-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"></path><path d="M5 9.5V21h14V9.5M9 21v-6h6v6"></path></svg>
                 <small>Aktuelle Woche</small>
             </a>
 
-            <a class="week-nav-button" href="/lehrer?woche={format_week_value(next_week)}{teacher_query}" aria-label="Nächste Woche">
+            <a class="week-nav-button" href="{route}?woche={format_week_value(next_week)}{teacher_query}" aria-label="Nächste Woche">
                 <svg class="week-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>
                 <small>Weiter</small>
             </a>
@@ -456,6 +459,11 @@ def render_teacher_page(
     pin_modal_changed: bool = False,
     session_username: str | None = None,
     block_mode: bool = False,
+    page_week_plans: dict | None = None,
+    page_content: str | None = None,
+    page_navigation: str | None = None,
+    page_title: str = "Lehrerplan",
+    page_active: str = "teachers",
 ) -> str:
     """Erzeugt die komplette Lehrerplan-Seite."""
 
@@ -472,15 +480,26 @@ def render_teacher_page(
             </section>
         """
     else:
-        week_plans = get_week_plans_for_page(selected_date)
+        week_plans = page_week_plans if page_week_plans is not None else get_week_plans_for_page(selected_date)
         week_title = get_week_title(week_plans)
         plan_timestamp_text = get_latest_timestamp_text(week_plans)
         week_version = get_week_version(week_plans)
 
-        available_teachers = get_available_teachers(week_plans)
+        available_teachers = []
+        if page_content is None:
+            catalogue = dict(week_plans)
+            next_week = adjacent_school_week(selected_date)
+            if next_week != selected_date:
+                try:
+                    catalogue.update(get_week_plans_for_page(next_week))
+                except ResourceNotFound:
+                    pass
+            available_teachers = get_available_teachers(catalogue)
 
-        if not selected_teacher or selected_teacher not in available_teachers:
-            content = render_teacher_selection(week_plans, selected_date)
+        if page_content is not None:
+            content = page_content
+        elif not selected_teacher or selected_teacher not in available_teachers:
+            content = render_teacher_selection(catalogue, selected_date)
         else:
             content = f"""
                 <section class="message class-message">
@@ -501,7 +520,7 @@ def render_teacher_page(
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="icon" href="/icons/favicon.png" type="image/png">
-    <title>Lehrerplan</title>
+    <title>{escape(page_title)}</title>
     <style>
         {COMMON_CSS}
 
@@ -691,9 +710,9 @@ def render_teacher_page(
             gap: 2px;
             min-height: 58px;
             padding: 7px;
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            background: var(--surface);
+            border: 0;
+            border-radius: 0;
+            background: transparent;
             list-style: none;
             cursor: pointer;
         }}
@@ -1011,16 +1030,16 @@ def render_teacher_page(
     <main>
         <header class="topbar">
             <div class="brand">
-                <h1>Vertretungsplan</h1>
+                <h1>{escape(page_title)}</h1>
                 {render_vp_user_identity(session_username)}
             </div>
 
-            {render_vp_navigation("teachers", logout_csrf_token, can_change_pin=can_change_pin, force_pin_change=force_pin_change, pin_modal_error=pin_modal_error, pin_modal_changed=pin_modal_changed, session_username=session_username)}
+            {render_vp_navigation(page_active, logout_csrf_token, can_change_pin=can_change_pin, force_pin_change=force_pin_change, pin_modal_error=pin_modal_error, pin_modal_changed=pin_modal_changed, session_username=session_username)}
         </header>
 
         <section class="panel">
             <div class="selected-week-label">Ausgewählte Woche: <strong>{escape(week_title)}</strong></div>
-            {render_week_navigation(selected_date, selected_teacher, block_mode)}
+            {page_navigation if page_navigation is not None else render_week_navigation(selected_date, selected_teacher, block_mode)}
 
             <div class="meta">
                 Neuester Planstand: {escape("Keine Plandaten verfügbar" if plan_timestamp_text == "unbekannt" else plan_timestamp_text)}
@@ -1051,6 +1070,29 @@ def render_teacher_page(
             document.querySelectorAll("details.week-lesson").forEach(details => {{
                 const originalParent = details.parentNode;
                 const originalNextSibling = details.nextSibling;
+                let popupScrollOrigin = null;
+                const scrollPosition = () => {{
+                    let x = window.scrollX, y = window.scrollY;
+                    for (let parent = originalParent; parent && parent !== document.body; parent = parent.parentElement) {{
+                        if (parent === document.scrollingElement) continue;
+                        x += parent.scrollLeft;
+                        y += parent.scrollTop;
+                    }}
+                    return {{ x, y }};
+                }};
+                document.addEventListener("scroll", () => {{
+                    if (!details.open || !popupScrollOrigin) return;
+                    const current = scrollPosition();
+                    const dx = current.x - popupScrollOrigin.x;
+                    const dy = current.y - popupScrollOrigin.y;
+                    details.style.setProperty("--popup-left", `${{popupScrollOrigin.left - dx}}px`);
+                    details.style.setProperty("--popup-top", `${{popupScrollOrigin.top - dy}}px`);
+                    if (details.parentNode === document.body) {{
+                        details.style.left = `${{popupScrollOrigin.markerLeft - dx}}px`;
+                        details.style.top = `${{popupScrollOrigin.markerTop - dy}}px`;
+                    }}
+                }}, true);
+
 
                 if (details.classList.contains("day-info-marker")) {{
                     originalParent.style.cursor = "pointer";
@@ -1068,6 +1110,7 @@ def render_teacher_page(
                     details.style.removeProperty("--popup-top");
 
                     if (!details.open) {{
+                        popupScrollOrigin = null;
                         if (details.classList.contains("day-info-marker") && details.parentNode === document.body) {{
                             details.style.removeProperty("position");
                             details.style.removeProperty("top");
@@ -1138,6 +1181,8 @@ def render_teacher_page(
                         details.classList.add("popup-fixed");
                         details.style.setProperty("--popup-left", `${{left}}px`);
                         details.style.setProperty("--popup-top", `${{top}}px`);
+                        popupScrollOrigin = {{ ...scrollPosition(), left, top,
+                            markerLeft: detailsRect.left, markerTop: detailsRect.top }};
                     }});
                 }});
             }});

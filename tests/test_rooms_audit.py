@@ -105,7 +105,7 @@ def test_normal_plan_source_is_visible_and_errors_show_no_room_cards():
     description = describe_room_plan(normal)
     html = render_rooms_page(DAY, 4, [101], plan_description=description)
     assert 'Grundlage: normaler Stundenplan' in html
-    assert 'kein Tagesplan veröffentlicht' in html
+    assert 'kein Tagesplan veröffentlicht' not in html
     html = render_rooms_page(DAY, 4, None, error_message='Abruf fehlgeschlagen', plan_version='loading')
     assert 'Abruf fehlgeschlagen' in html
     assert '<div class="room-card ' not in html

@@ -27,6 +27,7 @@ from plan_page import get_available_classes, get_selected_class_cookie_name, get
 from rooms_page import describe_room_plan, get_room_plan_for_page, get_free_rooms_for_page, get_room_plan_version, render_rooms_page, warm_free_room_results_from_cache
 from subscriptions import SubscriptionNotifier, available_class_names_from_plans, subject_key, subject_options_from_plans
 from teacher_page import render_teacher_page
+from room_schedule_page import render_room_schedule_page
 from vp_data import ResourceNotFound, Unauthorized, fetch_plan, get_cached_plan_for_page, get_plan_for_page, get_subject_catalog_plans, get_subject_catalog_plans_for_page, log, warm_page_caches_from_disk
 from web_utils import cookie_values, format_week_value, join_cookie_list, make_cookie, parse_cookie_header, parse_hour, parse_week, query_value, query_values, redirect, send_html, split_cookie_list
 
@@ -331,6 +332,27 @@ class AppRequestHandler(BaseHTTPRequestHandler):
         if session.user.must_change_pin:
             self._render_required_pin(session)
             return
+        if parsed.path in ("/", "/lehrer", "/raeume"):
+            from school_calendar import refresh_school_weeks, school_week
+            import vp_data
+            refresh_school_weeks(vp_data.SCHULNUMMER, vp_data.BENUTZERNAME, vp_data.PASSWORT, vp_data.CACHE_DIR)
+            if parsed.path == "/raeume" and (query_value(query, "frei") == "1" or query_value(query, "datum") is not None):
+                from urllib.parse import urlencode
+                from web_utils import parse_date
+                day = parse_date(query_value(query, "datum")) if query_value(query, "datum") else parse_week(query_value(query, "woche"))
+                canonical = urlencode({"frei": "1", "datum": day.isoformat(), "stunde": parse_hour(query_value(query, "stunde"))})
+                if parsed.query != canonical:
+                    redirect(self, "/raeume?" + canonical)
+                    return
+            if query_value(query, "frei") != "1" and query_value(query, "datum") is None:
+                requested = parse_week(query_value(query, "woche"))
+                available = school_week(requested)
+                if available != requested:
+                    from urllib.parse import urlencode
+                    target = {key: values for key, values in query.items()}
+                    target["woche"] = [format_week_value(available)]
+                    redirect(self, parsed.path + "?" + urlencode(target, doseq=True))
+                    return
         if parsed.path == "/pin-aendern":
             redirect(self, "/")
             return
@@ -791,7 +813,29 @@ class AppRequestHandler(BaseHTTPRequestHandler):
 
     def handle_rooms_page(self, query: dict[str, list[str]]) -> None:
         from web_utils import parse_date
+        if query_value(query, "frei") != "1" and query_value(query, "datum") is None:
+            selected_date = parse_week(query_value(query, "woche"))
+            cookies = self._cookies()
+            room = query_value(query, "raum") or cookies.get("selected_room")
+            requested_block = query_value(query, "block")
+            block_mode = requested_block == "1" if requested_block is not None else cookies.get("room_block_mode") == "1"
+            headers = []
+            if room:
+                headers.append(make_cookie("selected_room", room))
+            if requested_block is not None:
+                headers.append(make_cookie("room_block_mode", "1" if block_mode else "0"))
+            session = self._session()
+            flags = self._nav_flags(session) if session else {}
+            options = dict(block_mode=block_mode, logout_csrf_token=session.csrf_token if session else None, **flags)
+            try:
+                html = render_room_schedule_page(selected_date, room, **options)
+            except Exception as error:
+                html = render_room_schedule_page(selected_date, room, error_message=f"Beim Laden der Daten ist ein Fehler aufgetreten: {error}", **options)
+            send_html(self, html, headers)
+            return
         selected_date, selected_hour = parse_date(query_value(query, "datum")), parse_hour(query_value(query, "stunde"))
+        if query_value(query, "datum") is None and query_value(query, "woche"):
+            selected_date = parse_week(query_value(query, "woche"))
         session = self._session()
         flags = self._nav_flags(session) if session else {}
         try:

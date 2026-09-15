@@ -55,7 +55,7 @@ def render_vp_navigation(
     session_username: str | None = None,
 ) -> str:
     links = (("classes", "/", "Klassen"), ("teachers", "/lehrer", "Lehrer"),
-             ("rooms", "/raeume", "Freie Räume"), ("notifications", "/abos", "Ankündigungen"))
+             ("rooms", "/raeume", "Räume"), ("notifications", "/abos", "Ankündigungen"))
     primary_items = ""
     for key, href, label in links:
         active_class = ' class="active"' if key == active else ""
@@ -937,7 +937,7 @@ main {
     transform: rotate(-12deg);
 }
 
-.theme-toggle:focus-within {
+.theme-toggle:has(input:focus-visible) {
     outline: 3px solid color-mix(in srgb, var(--primary) 25%, transparent);
     outline-offset: 2px;
 }
