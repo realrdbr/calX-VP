@@ -88,7 +88,10 @@ def room_view_switch(selected_date, selected_room=None, *, free=False):
       @media (max-width: 1000px) {{
         .room-toolbar {{ display: flex; flex-direction: column; align-items: stretch; gap: 12px; }}
         .room-toolbar > .room-view-switch, .room-toolbar > .room-view-switch a {{ width: 100%; box-sizing: border-box; }}
-        .room-toolbar > .class-message {{ display: flex; flex-wrap: wrap; }}
+                .room-toolbar > .class-message {{ display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }}
+                .room-toolbar .room-heading {{ grid-column: 1; }}
+                .room-toolbar .block-switch {{ grid-column: 2; margin-left: 0; justify-self: end; }}
+                .room-toolbar .class-select {{ grid-column: 1 / -1; width: 100%; }}
       }}
       @media (max-width: 1000px) {{
         .free-room-controls {{ grid-template-columns: minmax(0, 1fr); }}
