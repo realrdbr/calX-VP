@@ -240,10 +240,15 @@ class SubscriptionNotifier:
     def _daily_summary_lines(self, recipient: NotificationRecipient, plan: object) -> list[str]:
         include_class_name = len(recipient.selected_classes) > 1
         lines: list[str] = []
+        free_blocks: list[str] = []
         for block in self.blocks:
             entries = self._class_block_entries(recipient, plan, block)
             if entries:
+                lines.extend(free_blocks)
+                free_blocks.clear()
                 lines.append(self._format_block_line(block.number, entries, include_class_name=include_class_name))
+            else:
+                free_blocks.append(f"{block.number}. Block: -")
         return lines
 
     def _change_lines(self, recipient: NotificationRecipient, plan: object) -> list[str]:

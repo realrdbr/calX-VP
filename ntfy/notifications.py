@@ -212,11 +212,16 @@ class ScheduleNotifier:
         if key in self.state.morning_sent:
             return False
         lessons = self._lessons(plan)
-        entries = [
-            f"{block.number}. Block: {self._lesson_text(self._block_lessons(lessons, block))}"
-            for block in self.config.blocks
-            if self._block_lessons(lessons, block) or block.number != 4
-        ]
+        entries = []
+        free_blocks = []
+        for block in self.config.blocks:
+            block_lessons = self._block_lessons(lessons, block)
+            if block_lessons:
+                entries.extend(free_blocks)
+                free_blocks.clear()
+                entries.append(f"{block.number}. Block: {self._lesson_text(block_lessons)}")
+            else:
+                free_blocks.append(f"{block.number}. Block: -")
         self.client.publish(
             "Heute, " + plan_date.strftime("%d.%m.%Y") + ":\n" + "\n".join(entries),
             title="(VPrintfy) Heute",
