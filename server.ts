@@ -15,6 +15,9 @@ import {
   initDatabase,
   isDbConnected,
   dbGetUser,
+  dbAcknowledgeInfo,
+  dbSetInfoAcknowledged,
+  dbSetVpOnlyInfoAcknowledged,
   dbGetUsers,
   dbSaveUser,
   dbSetRequiredPin,
@@ -482,10 +485,14 @@ async function startServer() {
       courses,
       pin: pinToSave
     });
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'infoAcknowledged')) {
+      await dbSetInfoAcknowledged(username, !!req.body.infoAcknowledged);
+    }
 
     const token = await generateSessionToken(username);
     res.setHeader('Set-Cookie', sessionCookies(token));
-    res.json({ user: sanitizeUser(updated) });
+    const currentUser = await dbGetUser(username);
+    res.json({ user: sanitizeUser({ ...updated, infoAcknowledged: !!currentUser?.infoAcknowledged }) });
   });
 
   app.post('/api/pin', requireAuth, async (req, res) => {
@@ -507,6 +514,14 @@ async function startServer() {
   app.get('/api/session', requireAuth, async (req, res) => {
     const user = await dbGetUser((req as any).authenticatedUser);
     res.json({ user: sanitizeUser(user) });
+  });
+
+  app.post('/api/info/acknowledge', requireAuth, async (req, res) => {
+    const username = String((req as any).authenticatedUser);
+    const user = await dbGetUser(username);
+    if (user?.status === 'VP_ONLY') await dbSetVpOnlyInfoAcknowledged(username, true);
+    else await dbAcknowledgeInfo(username);
+    res.json({ success: true });
   });
 
   app.post('/api/logout', requireAuth, async (req, res) => {
@@ -846,7 +861,7 @@ async function startServer() {
 
   app.post('/api/admin/users', requireElevatedAdmin, async (req, res) => {
     const { username, pin, vpOnly, className } = req.body;
-    const uname = (username || '').toLowerCase();
+    const uname = String(username || '').trim();
     if (!uname) return res.status(400).json({ error: 'Username erforderlich' });
     if (pin !== undefined && pin !== '' && (typeof pin !== 'string' || !/^\d{4}$/.test(pin))) {
       return res.status(400).json({ error: 'Die PIN muss leer sein oder exakt vier Ziffern enthalten.' });
@@ -859,6 +874,11 @@ async function startServer() {
       return res.status(400).json({ error: 'Name bereits vergeben.' });
     }
 
+    const knownTeachers = new Set((await dbGetCourses()).map(course => course.teacher.trim().toLocaleLowerCase('de')).filter(Boolean));
+    const isTeacher = knownTeachers.has(uname.toLocaleLowerCase('de'));
+    if (isTeacher && (typeof pin !== 'string' || !/^\d{4}$/.test(pin))) {
+      return res.status(400).json({ error: 'Lehreraccounts brauchen eine vierstellige Start-PIN.' });
+    }
     if (vpOnly) {
       if (!pin) return res.status(400).json({ error: 'VP-only-Nutzer brauchen eine vierstellige Start-PIN.' });
       const ntfyUsername = `u_${crypto.randomBytes(12).toString('hex')}`;
@@ -875,14 +895,14 @@ async function startServer() {
           ntfyUsername,
           ntfyPassword,
         });
-        return res.status(201).json({ success: true, username: created.username, vpOnly: true });
+        return res.status(201).json({ success: true, username: created.username, vpOnly: true, isTeacher });
       } catch (error: any) {
         await deleteNtfyReader(ntfyUsername).catch(() => undefined);
         return res.status(400).json({ error: error.message || 'VP-only-Nutzer konnte nicht angelegt werden.' });
       }
     }
 
-    await dbSaveUser(uname, {
+    await dbSaveUser(uname.toLowerCase(), {
       courses: [],
       pin: pin || undefined,
       className: String(className || process.env.VP_DEFAULT_CLASS || '11').trim(),
@@ -895,7 +915,8 @@ async function startServer() {
         colorFerien: '#f1c40f'
       }
     });
-    res.status(201).json({ success: true, username: uname });
+    if (isTeacher) await dbSetInfoAcknowledged(uname, false);
+    res.status(201).json({ success: true, username: uname.toLowerCase(), isTeacher });
   });
 
   app.delete('/api/admin/users/:username', requireElevatedAdmin, async (req, res) => {

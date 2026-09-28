@@ -31,8 +31,9 @@ export interface User {
   courses: string[];
   hasPin?: boolean;
   preferences: UserPreferences;
-  status?: 'ACTIVE' | 'READ_ONLY' | 'BLOCKED' | 'ADMIN';
+  status?: 'ACTIVE' | 'READ_ONLY' | 'BLOCKED' | 'ADMIN' | 'VP_ONLY';
   isAdmin?: boolean;
+  infoAcknowledged?: boolean;
 }
 
 export type EventType = string;

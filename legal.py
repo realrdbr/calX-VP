@@ -1,6 +1,6 @@
-import json
 import os
 import re
+import json
 from pathlib import Path
 from html import escape
 
@@ -19,13 +19,17 @@ def legal_data():
     return [(title, render_legal_text(content, values)) for title, content in sections]
 
 
-def render_legal_page(info=False, imprint=False):
+def render_legal_page(info=False, imprint=False, info_ack_required=False, info_csrf_token=""):
     title = "Anbieterkennzeichnung gemäß § 5 DDG" if imprint else "Info" if info else "Datenschutzerklärung"
     if imprint:
         content = '<h2>Anbieter und Kontakt</h2><p>' + escape(os.getenv("PRIVACY_CONTROLLER", "Vom Betreiber noch zu ergänzen")) + '</p><p>' + escape(os.getenv("PRIVACY_ADDRESS", "Vom Betreiber noch zu ergänzen")) + '</p><p>E-Mail: ' + escape(os.getenv("SUPPORT_MAIL", "support@cal11.de")) + '</p><p>Die Projektsoftware steht unter der European Union Public Licence (EUPL) 1.2. Eingebundene Bibliotheken unterliegen ihren jeweiligen Lizenzen.</p><p>Privat betriebenes Kalender- und Vertretungsplanprojekt. Keine offizielle Verbindung mit dem Gymnasium Olbernhau.</p><p><a href="https://github.com/realrdbr/calX-VP" rel="noopener noreferrer">Quellcode auf GitHub</a></p>'
-    elif info:
-        content = '<p>Diese Webseite hat keine offizielle Verbindung mit dem Gymnasium Olbernhau und wurde privat von Schülern erstellt.</p><p>Der Zugriff ist für Schüler:innen der 11. Klasse des Gymnasiums Olbernhau sowie in Ausnahmefällen für weitere autorisierte Schüler:innen vorgesehen.</p>'
-        content += '<p>Bei Fragen oder Problemen: ' + escape(os.getenv("SUPPORT_MAIL", "support@cal11.de")) + '</p><p><a href="https://github.com/realrdbr/calX-VP" rel="noopener noreferrer">Quellcode auf GitHub</a></p>'
+    elif info or info_ack_required:
+        info_data = json.loads((Path(__file__).parent / "public/info.json").read_text())
+        content = ''.join('<p>' + escape(paragraph) + '</p>' for paragraph in info_data["paragraphs"])
+        content += '<p>' + escape(info_data["supportPrefix"]) + ' ' + escape(os.getenv("SUPPORT_MAIL", "support@cal11.de")) + '.</p>'
+        content += '<p><a href="' + escape(info_data["repository"], quote=True) + '" rel="noopener noreferrer">Quellcode auf GitHub</a></p><p>' + escape(info_data["license"]) + '</p>'
     else:
         content = ''.join('<section><h2>' + escape(heading) + '</h2><p>' + escape(body) + '</p></section>' for heading, body in legal_data())
+    if info_ack_required:
+        return '<div class="required-info-overlay" role="presentation"><section class="info-dialog required-info-dialog" role="dialog" aria-modal="true" aria-labelledby="required-info-title" data-ui-theme="system"><div class="info-head"><h2 id="required-info-title">Info</h2></div><div class="info-content">' + content + '</div><form method="post" action="/info/gelesen"><input type="hidden" name="csrf_token" value="' + escape(info_csrf_token, quote=True) + '"><button class="info-submit" type="submit">Als gelesen markieren</button></form></section></div>'
     return '<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + title + '</title><style>body{font:16px/1.6 system-ui;margin:0 auto;padding:24px;max-width:850px;color:#172033;background:#f8fafc}h2{font-size:1.2rem}a{color:#075985}footer{margin-top:32px;padding:20px;border-top:1px solid #cbd5e1}</style></head><body><main><a href="/">Zur Startseite</a><h1>' + title + '</h1>' + content + '</main></body></html>'

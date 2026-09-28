@@ -3,13 +3,14 @@ import { weekEventSegment, weekEventIsAllDay, intervalLanes } from '../lib/weekE
 import { useState, useEffect, useMemo, useRef, MouseEvent, TouchEvent } from 'react';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, addMonths, subMonths, addWeeks, subWeeks, startOfWeek, endOfWeek, isSameMonth, getISOWeek } from 'date-fns';
 import { de } from 'date-fns/locale';
-import { fetchEvents, setEventCompleted, createEvent, updateEvent, deleteEvent, fetchCourses, fetchAdmins, fetchCategories } from '../lib/api';
+import { fetchEvents, setEventCompleted, createEvent, updateEvent, deleteEvent, fetchCourses, fetchAdmins, fetchCategories, saveUserSettings } from '../lib/api';
 import { AppEvent, Course, COURSES, User, EventCategory } from '../types';
 import EventModal from './EventModal';
 import SettingsModal from './SettingsModal';
 import AdminModal from './AdminModal';
 import { Menu, X, Settings, Shield, LogOut, ChevronLeft, ChevronRight } from 'lucide-react';
 import { VERTRETUNGSPLAN_URL } from '../lib/externalLinks';
+import InfoModal from './InfoModal';
 
 interface Props {
   user: User;
@@ -63,12 +64,18 @@ export default function CalendarView({ user, onUpdatePreferences, isInitialSetup
   const [editingEvent, setEditingEvent] = useState<AppEvent | undefined>(undefined);
   const [editConflict, setEditConflict] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [requiredInfoOpen, setRequiredInfoOpen] = useState(!user.infoAcknowledged);
+  const [infoAcknowledged, setInfoAcknowledged] = useState(!!user.infoAcknowledged);
   const [isAdmin, setIsAdmin] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [edgeSwipePreview, setEdgeSwipePreview] = useState<{ edge: EdgeSwipeDirection; distance: number; armed: boolean } | null>(null);
   const edgeSwipeGesture = useRef<EdgeSwipeGesture | null>(null);
 
   const { preferences } = user;
+  useEffect(() => {
+    setInfoAcknowledged(!!user.infoAcknowledged);
+    setRequiredInfoOpen(!user.infoAcknowledged);
+  }, [user.infoAcknowledged]);
   const [systemPrefersDark, setSystemPrefersDark] = useState(() =>
     typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches
   );
@@ -89,6 +96,7 @@ export default function CalendarView({ user, onUpdatePreferences, isInitialSetup
     const hasCho = userCourses.includes('CHO') || userCourses.includes('Chor');
 
     return rawEvents.filter(e => {
+      if (e.courseId.startsWith('PRIVATE:')) return true;
       if (categories.some(category => category.id === e.type && category.isPrivate)) {
         return true;
       }
@@ -414,10 +422,16 @@ export default function CalendarView({ user, onUpdatePreferences, isInitialSetup
   const calendarDays = getCalendarDays();
 
   const getCourseName = (courseId: string) => {
+    if (courseId.startsWith('PRIVATE:')) return courseId.slice('PRIVATE:'.length) || 'Privat';
     if (courseId === 'ALLGEMEIN') return 'Allgemein';
     if (courseId === 'CHO' || courseId === 'Cho' || courseId === 'Chor') return 'Chor';
     const c = allCourses.find(c => c.id === courseId);
     return c ? c.name : courseId;
+  };
+
+  const getEventCourseName = (event: AppEvent) => {
+    const privateCategory = categories.find(category => category.id === event.type && category.isPrivate);
+    return privateCategory?.name || getCourseName(event.courseId);
   };
 
   const getEventTypeStyle = (type: string) => {
@@ -741,10 +755,10 @@ export default function CalendarView({ user, onUpdatePreferences, isInitialSetup
                     className="relative z-[1] min-w-0 overflow-hidden rounded-sm border border-black/10 px-1.5 py-1 text-xs cursor-pointer flex flex-col justify-center leading-tight mx-1"
                     style={{ ...getEventCardStyle(event), gridColumn: `${start + 2} / ${end + 2}`, gridRow: 1,
                       alignSelf: 'start', marginTop: lane * 44 + 4, height: 40 }}
-                    title={`${event.title} (${getCourseName(event.courseId)})`}>
+                    title={`${event.title} (${getEventCourseName(event)})`}>
                     <CompletionMark completed={event.completed} />
                     <span className="font-bold truncate">{event.title}</span>
-                    <span className="opacity-90 text-[10px] truncate">{getCourseName(event.courseId)}</span>
+                    <span className="opacity-90 text-[10px] truncate">{getEventCourseName(event)}</span>
                   </div>
                 ))}
               </div>
@@ -773,11 +787,11 @@ export default function CalendarView({ user, onUpdatePreferences, isInitialSetup
                           className="absolute pointer-events-auto min-w-0 overflow-hidden rounded-sm px-1.5 text-xs cursor-pointer flex flex-col leading-tight border border-black/10"
                           style={{ ...getEventCardStyle(event), top: start, height: end - start,
                             left: `calc(${lane * 100 / laneCount}% + 2px)`, width: `calc(${100 / laneCount}% - 4px)` }}
-                          title={`${event.title} (${getCourseName(event.courseId)}) - ${segment.label}`}>
+                          title={`${event.title} (${getEventCourseName(event)}) - ${segment.label}`}>
                           <CompletionMark completed={event.completed} />
                           <span className="text-xs font-semibold opacity-95">{segment.label}</span>
                           <span className="font-bold truncate text-[13px]">{event.title}</span>
-                          <span className="opacity-90 text-[11px] truncate">{getCourseName(event.courseId)}</span>
+                          <span className="opacity-90 text-[11px] truncate">{getEventCourseName(event)}</span>
                         </div>
                       ))}
                     </div>;
@@ -864,7 +878,7 @@ export default function CalendarView({ user, onUpdatePreferences, isInitialSetup
                   });
 
                   const maxRowInWeek = slotted.length > 0 ? Math.max(...slotted.map(s => s.rowStart)) : 2;
-                  const calculatedMinHeight = `${Math.max(130, (maxRowInWeek + 1) * 32 + 20)}px`;
+                  const calculatedMinHeight = `${Math.max(130, (maxRowInWeek + 1) * 42 + 20)}px`;
 
                   return (
                     <div 
@@ -897,7 +911,7 @@ export default function CalendarView({ user, onUpdatePreferences, isInitialSetup
                       </div>
 
                       {/* Foreground Layer */}
-                      <div className="relative grid grid-cols-[40px_1fr_1fr_1fr_1fr_1fr_1fr_1fr] auto-rows-min gap-y-1 pb-2 pointer-events-none z-10">
+                      <div className="relative grid grid-cols-[40px_1fr_1fr_1fr_1fr_1fr_1fr_1fr] auto-rows-min gap-y-1 pb-2 pointer-events-none z-10" style={{ gridAutoRows: 'minmax(36px, auto)' }}>
                         <div className="col-start-1 row-start-1 h-8"></div>
                         {week.map((day, dayIdx) => {
                           const isCurrentMonth = isSameMonth(day, currentDate);
@@ -927,7 +941,7 @@ export default function CalendarView({ user, onUpdatePreferences, isInitialSetup
                               gridRowStart: se.rowStart
                             }}
                             onClick={(e) => openEditEventModal(se.event, e)}
-                            title={`${se.event.title} (${getCourseName(se.event.courseId)})${se.event.startTime ? ` [${se.event.startTime}${se.event.endTime ? `-${se.event.endTime}` : ''}]` : ''}`}
+                            title={`${se.event.title} (${getEventCourseName(se.event)})${se.event.startTime ? ` [${se.event.startTime}${se.event.endTime ? `-${se.event.endTime}` : ''}]` : ''}`}
                           >
                             <CompletionMark completed={se.event.completed} />
                             <div className="flex items-baseline justify-between gap-1.5 w-full overflow-hidden">
@@ -939,7 +953,7 @@ export default function CalendarView({ user, onUpdatePreferences, isInitialSetup
                               )}
                             </div>
                             <span className="opacity-90 text-[10px] truncate w-full">
-                              {getCourseName(se.event.courseId)}
+                              {getEventCourseName(se.event)}
                             </span>
                           </div>
                         ))}
@@ -952,6 +966,13 @@ export default function CalendarView({ user, onUpdatePreferences, isInitialSetup
           )}
         </div>
       </div>
+
+      <InfoModal isOpen={requiredInfoOpen} required onClose={() => { if (infoAcknowledged) setRequiredInfoOpen(false); }} themeMode={preferences.themeMode || 'system'} onAcknowledge={async () => {
+        await saveUserSettings(user.username, { infoAcknowledged: true });
+        user.infoAcknowledged = true;
+        setInfoAcknowledged(true);
+        setRequiredInfoOpen(false);
+      }} />
 
       {isModalOpen && (
         <EventModal

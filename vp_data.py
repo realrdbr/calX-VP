@@ -648,14 +648,12 @@ def get_week_plans_for_page(selected_date: date) -> dict[date, object | None]:
 
         return week_plans
 
-    # Beim allerersten Aufruf ohne irgendeinen Wochen-Cache laden wir einmalig
-    # synchron und zeigen fehlende Tage weiterhin als leer an.
+    # Beim Kaltstart darf eine interaktive Seitenanfrage nicht fünf Tagespläne
+    # synchron über das Netzwerk laden. Starte die Tages- und Wochenabrufe im
+    # Hintergrund; der vorhandene Versions-Poller lädt die fertigen Pläne nach.
     for plan_date in week_plans:
-        try:
-            week_plans[plan_date] = get_plan_for_page(plan_date)
-        except ResourceNotFound:
-            log(f"Kein Plan für {plan_date.isoformat()} verfügbar.")
-            week_plans[plan_date] = None
+        refresh_plan_in_background(plan_date)
+    refresh_official_weekly_plans_in_background(_week_monday(selected_date))
 
     return week_plans
 

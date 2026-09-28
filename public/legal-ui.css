@@ -12,6 +12,8 @@
 .info-dialog[data-ui-theme="dark"], .required-pin-page[data-ui-theme="dark"], html[data-theme="dark"] .info-dialog { --info-surface:#1e1e1e; --info-bg:#121212; --info-text:#eee; --info-muted:#cbd5e1; --info-border:#444; color-scheme:dark; }
 html[data-theme="light"] .info-dialog { --info-surface:#fff; --info-bg:#f8fafc; --info-text:#0f172a; --info-muted:#475569; --info-border:#cbd5e1; color-scheme:light; }
 .info-dialog { position:fixed; inset:0; margin:auto; width:min(448px, calc(100vw - 32px)); max-height:calc(100dvh - 32px); padding:20px; border:1px solid var(--info-border); border-radius:10px; background:var(--info-surface); color:var(--info-text); box-shadow:0 20px 50px #0004; overflow:auto; }
+.required-info-overlay { position:fixed; inset:0; z-index:9999; display:flex; align-items:center; justify-content:center; box-sizing:border-box; padding:16px; background:rgba(0,0,0,.58); pointer-events:auto; }
+.required-info-dialog { position:relative; inset:auto; flex:0 1 auto; width:min(448px, calc(100vw - 32px)); max-height:calc(100dvh - 32px); margin:0; overflow:auto; }
 .info-dialog::backdrop { background:#0008; }
 .info-dialog .info-head { display:flex; align-items:center; justify-content:space-between; gap:16px; padding-bottom:12px; border-bottom:1px solid var(--info-border); }
 .info-dialog h2 { margin:0; font-size:20px; font-weight:800; }

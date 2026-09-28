@@ -83,7 +83,8 @@ export default function EventModal({ isOpen, onClose, onSave, onDelete, initialD
       setStartTime(event.startTime || '');
       setEndTime(event.endTime || '');
       setShowTime(!!(event.startTime || event.endTime));
-      setCourseId(event.courseId);
+      const eventCategory = categories.find(category => category.id === event.type);
+      setCourseId(eventCategory?.isPrivate ? `PRIVATE:${eventCategory.id}` : event.courseId);
       setType(event.type);
       setDescription(event.description || '');
       setAttachments(event.attachments || []);
@@ -101,7 +102,7 @@ export default function EventModal({ isOpen, onClose, onSave, onDelete, initialD
       setAttachments([]);
       setIsViewMode(false);
     }
-  }, [event, initialDate]);
+  }, [event, initialDate, categories]);
 
   useEffect(() => {
     if (event || isAdmin || categories.length === 0) return;
@@ -112,7 +113,7 @@ export default function EventModal({ isOpen, onClose, onSave, onDelete, initialD
       && (currentCategory.isPrivate || !currentCategory.locked);
     if (!currentIsSelectable && selectableCategory) {
       setType(selectableCategory.id);
-      if (selectableCategory.isPrivate) setCourseId('ALLGEMEIN');
+      if (selectableCategory.isPrivate) setCourseId(`PRIVATE:${selectableCategory.id}`);
     }
   }, [categories, event, isAdmin, type]);
 
@@ -122,7 +123,8 @@ export default function EventModal({ isOpen, onClose, onSave, onDelete, initialD
     e.preventDefault();
     if (isReadOnly) return;
     const normalizedEndDate = endDate && endDate >= date && endDate !== date ? endDate : null;
-    const normalizedCourseId = categories.find(category => category.id === type)?.isPrivate ? 'ALLGEMEIN' : courseId;
+    const selectedCategory = categories.find(category => category.id === type);
+    const normalizedCourseId = selectedCategory?.isPrivate ? `PRIVATE:${selectedCategory.id}` : courseId;
     onSave({
       title,
       date,
@@ -212,14 +214,18 @@ export default function EventModal({ isOpen, onClose, onSave, onDelete, initialD
     : allCourses.filter(c => userCourses.includes(c.id) || (c.id === 'Chor' && userCourses.includes('CHO')) || (c.id === 'CHO' && userCourses.includes('Chor')));
 
   const getCourseDisplayName = (cId: string) => {
+    if (cId.startsWith('PRIVATE:')) {
+      return categories.find(category => category.id === cId.slice('PRIVATE:'.length))?.name || 'Privat';
+    }
     if (!cId || cId === 'ALLGEMEIN') return 'Allgemein (für alle)';
     if (cId === 'CHO' || cId === 'Chor') return 'Chor (AG)';
     const found = allCourses.find(c => c.id === cId);
     return found ? `${found.name} (${found.teacher})` : cId;
   };
 
-  const selectedCourseDisplay = getCourseDisplayName(courseId);
-  const isPrivateCategory = !!categories.find(category => category.id === type)?.isPrivate;
+  const privateCategory = categories.find(category => category.id === type && category.isPrivate);
+  const isPrivateCategory = !!privateCategory;
+  const selectedCourseDisplay = privateCategory?.name || getCourseDisplayName(courseId);
 
   if (isViewMode) {
     return (
@@ -436,7 +442,8 @@ export default function EventModal({ isOpen, onClose, onSave, onDelete, initialD
                 onChange={e => {
                   const nextType = e.target.value;
                   setType(nextType);
-                  if (categories.find(category => category.id === nextType)?.isPrivate) setCourseId('ALLGEMEIN');
+                  const nextCategory = categories.find(category => category.id === nextType);
+                  if (nextCategory?.isPrivate) setCourseId(`PRIVATE:${nextCategory.id}`);
                 }}
                 className={`w-full px-3 py-1.5 border ${theme.border} ${theme.inputBg} ${theme.textMain} focus:outline-none`}
               >
@@ -451,20 +458,24 @@ export default function EventModal({ isOpen, onClose, onSave, onDelete, initialD
             <div>
               <label className={`block text-sm font-semibold ${theme.textMuted} mb-1`}>Kurszuweisung</label>
               <select
-                value={courseId}
+                value={isPrivateCategory ? `PRIVATE:${privateCategory.id}` : courseId}
                 onChange={e => setCourseId(e.target.value)}
                 disabled={isPrivateCategory}
                 aria-describedby={isPrivateCategory ? 'private-course-hint' : undefined}
                 className={`w-full px-3 py-1.5 border ${theme.border} ${theme.inputBg} ${theme.textMain} focus:outline-none text-sm disabled:opacity-45 disabled:cursor-not-allowed`}
               >
-                <option value="ALLGEMEIN">Allgemein (für alle)</option>
-                {availableCourses.map(c => (
-                  <option key={c.id} value={c.id}>
-                    {c.name} ({c.teacher})
-                  </option>
-                ))}
+                {isPrivateCategory ? (
+                  <option value={`PRIVATE:${privateCategory.id}`}>{privateCategory.name}</option>
+                ) : <>
+                  <option value="ALLGEMEIN">Allgemein (für alle)</option>
+                  {availableCourses.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} ({c.teacher})
+                    </option>
+                  ))}
+                </>}
               </select>
-              {isPrivateCategory && <p id="private-course-hint" className={`mt-1 text-[11px] ${theme.textMuted}`}>Private Termine sind keinem Kurs zugeordnet.</p>}
+              {isPrivateCategory && <p id="private-course-hint" className={`mt-1 text-[11px] ${theme.textMuted}`}>Private Termine werden unter „{privateCategory.name}“ angezeigt.</p>}
             </div>
           </div>
 

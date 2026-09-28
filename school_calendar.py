@@ -2,13 +2,14 @@
 from datetime import date, datetime, timedelta
 import json
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread
 from time import monotonic
 from xml.etree import ElementTree
 import requests
 
 _weeks = ()
 _last_attempt = None
+_refreshing = False
 _lock = Lock()
 
 
@@ -25,36 +26,90 @@ def parse_school_weeks(content):
     return tuple(sorted(result))
 
 
-def refresh_school_weeks(school, username, password, cache_dir):
-    """On failure retain the last valid index; an HTTP error is never a holiday."""
+def _refresh_school_weeks(school, username, password, cache_dir, *, force=False):
+    """Fetch the index without holding the state lock during network I/O."""
     global _weeks, _last_attempt
     with _lock:
-        if _last_attempt is not None and monotonic() - _last_attempt < 300:
+        if not force and _last_attempt is not None and monotonic() - _last_attempt < 300:
             return
         _last_attempt = monotonic()
-        path = Path(cache_dir) / 'school-weeks.json'
-        if not _weeks:
-            try:
-                saved = json.loads(path.read_text())
-                if saved['school'] == str(school):
-                    _weeks = tuple(sorted({date.fromisoformat(day) for day in saved['weeks']}))
-            except (OSError, ValueError, KeyError, TypeError):
-                pass
+        restore_cache = not _weeks
+
+    path = Path(cache_dir) / 'school-weeks.json'
+    if restore_cache:
         try:
-            response = requests.get(f'https://www.stundenplan24.de/{school}/wplan/wdatenk/SPlanKl_Basis.xml',
-                                    auth=(username, password), timeout=10)
-            response.raise_for_status()
-            weeks = parse_school_weeks(response.content)
-        except (requests.RequestException, ValueError, KeyError, ElementTree.ParseError):
-            return
+            saved = json.loads(path.read_text())
+            cached_weeks = tuple(sorted({date.fromisoformat(day) for day in saved['weeks']})) if saved['school'] == str(school) else ()
+        except (OSError, ValueError, KeyError, TypeError):
+            cached_weeks = ()
+        if cached_weeks:
+            with _lock:
+                if not _weeks:
+                    _weeks = cached_weeks
+
+    try:
+        response = requests.get(f'https://www.stundenplan24.de/{school}/wplan/wdatenk/SPlanKl_Basis.xml',
+                                auth=(username, password), timeout=10)
+        response.raise_for_status()
+        weeks = parse_school_weeks(response.content)
+    except (requests.RequestException, ValueError, KeyError, ElementTree.ParseError):
+        return
+
+    with _lock:
         _weeks = weeks
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix('.tmp')
+        temporary.write_text(json.dumps({'school': str(school), 'weeks': [day.isoformat() for day in weeks]}))
+        temporary.replace(path)
+    except OSError:
+        pass
+
+
+def refresh_school_weeks(school, username, password, cache_dir, *, background=False):
+    """Refresh the published school-week index; pages can schedule it asynchronously."""
+    global _weeks, _last_attempt, _refreshing
+    if not background:
+        _refresh_school_weeks(school, username, password, cache_dir)
+        return
+
+    with _lock:
+        restore_cache = not _weeks
+        if _refreshing or (_last_attempt is not None and monotonic() - _last_attempt < 300):
+            return
+        # Reserve the refresh interval before starting the worker so concurrent
+        # page requests cannot queue duplicate network calls.
+        _last_attempt = monotonic()
+        _refreshing = True
+
+    if restore_cache:
+        path = Path(cache_dir) / 'school-weeks.json'
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = path.with_suffix('.tmp')
-            temporary.write_text(json.dumps({'school': str(school), 'weeks': [day.isoformat() for day in weeks]}))
-            temporary.replace(path)
-        except OSError:
-            pass
+            saved = json.loads(path.read_text())
+            cached_weeks = tuple(sorted({date.fromisoformat(day) for day in saved['weeks']})) if saved['school'] == str(school) else ()
+        except (OSError, ValueError, KeyError, TypeError):
+            cached_weeks = ()
+        if cached_weeks:
+            with _lock:
+                if not _weeks:
+                    _weeks = cached_weeks
+
+    def refresh():
+        global _refreshing
+        try:
+            _refresh_school_weeks(school, username, password, cache_dir, force=True)
+        finally:
+            with _lock:
+                _refreshing = False
+
+    worker = Thread(target=refresh, daemon=True, name='school-week-index-refresh')
+    try:
+        worker.start()
+    except RuntimeError:
+        with _lock:
+            _refreshing = False
+            _last_attempt = None
 
 
 def school_week(value):

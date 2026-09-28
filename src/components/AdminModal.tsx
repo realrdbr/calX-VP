@@ -114,6 +114,8 @@ export default function AdminModal({ isOpen, onClose, username, preferences }: P
   const [newUserPin, setNewUserPin] = useState('');
   const [newUserClass, setNewUserClass] = useState('11');
   const [newUserVpOnly, setNewUserVpOnly] = useState(false);
+  const knownTeacherAbbreviations = new Set(courses.map(course => course.teacher.trim().toLocaleLowerCase('de')).filter(Boolean));
+  const isNewUserTeacher = knownTeacherAbbreviations.has(newUserName.trim().toLocaleLowerCase('de'));
   const [pinEdits, setPinEdits] = useState<Record<string, string>>({});
   
   const handleAddUser = async () => {
@@ -575,13 +577,16 @@ export default function AdminModal({ isOpen, onClose, username, preferences }: P
                 </div>
                 
                 <div className={`grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_90px_105px_auto_auto] items-center gap-3 p-4 border ${theme.border} rounded-xl ${theme.bgInput}`}>
+                  <div className="sm:col-span-2">
                   <input
                     type="text"
                     value={newUserName}
-                    onChange={e => setNewUserName(e.target.value)}
+                    onChange={e => setNewUserName(e.target.value.slice(0, 64))}
                     placeholder="Benutzername"
-                    className={`min-w-0 px-3 py-2 border ${theme.borderInput} ${theme.bgModal} rounded-lg text-sm ${theme.textMain} focus:outline-none`}
+                    className={`w-full min-w-0 px-3 py-2 border ${theme.borderInput} ${theme.bgModal} rounded-lg text-sm ${theme.textMain} focus:outline-none`}
                   />
+                  {isNewUserTeacher && <p className="mt-1 rounded-md border border-teal-300 bg-teal-50 px-2 py-1 text-xs font-semibold text-teal-800 dark:border-teal-800 dark:bg-teal-950 dark:text-teal-200" role="status">Sie erstellen einen Lehreraccount</p>}
+                  </div>
                   <input
                     type="text"
                     value={newUserClass}
@@ -610,7 +615,7 @@ export default function AdminModal({ isOpen, onClose, username, preferences }: P
                   </label>
                   <button
                     onClick={handleAddUser}
-                    disabled={!newUserName.trim() || (newUserVpOnly && newUserPin.length !== 4)}
+                    disabled={!newUserName.trim() || ((newUserVpOnly || isNewUserTeacher) && newUserPin.length !== 4)}
                     className="px-4 py-2 text-white text-sm font-bold rounded-lg disabled:opacity-50 shadow-xs"
                     style={{ backgroundColor: theme.accent }}
                   >

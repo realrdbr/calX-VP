@@ -295,6 +295,7 @@ export async function initDatabase() {
           preferences LONGTEXT NOT NULL,
           status VARCHAR(20) DEFAULT 'ACTIVE',
           class_name VARCHAR(64) NOT NULL DEFAULT '11',
+          info_acknowledged TINYINT(1) NOT NULL DEFAULT 0,
           updated_at TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
       `);
@@ -373,6 +374,7 @@ export async function initDatabase() {
       // Keeping it here lets the VP service bootstrap a matching account on a
       // fresh browser/device instead of falling back to VP_DEFAULT_CLASS.
       await addLegacyColumn('users', 'class_name', "VARCHAR(64) NOT NULL DEFAULT '11'");
+      await addLegacyColumn('users', 'info_acknowledged', 'TINYINT(1) NOT NULL DEFAULT 0');
 
       // Migrate the former standalone admin list into the authoritative user
       // status before removing the redundant table.
@@ -550,7 +552,14 @@ export async function dbGetUser(username: string) {
   const uname = username.toLowerCase();
   if (isConnected && pool) {
     const [rows]: any = await pool.query('SELECT * FROM users WHERE username = ?', [uname]);
-    if (rows.length === 0) return null;
+    if (rows.length === 0) {
+      const [onlyTables]: any = await pool.query("SHOW TABLES LIKE 'vp_only_users'");
+      const [vpTables]: any = await pool.query("SHOW TABLES LIKE 'vp_users'");
+      if (!onlyTables.length || !vpTables.length) return null;
+      const [vpRows]: any = await pool.query(`SELECT vp.username, vp.class_name, IF(vp.active = 1 AND only_users.active = 1, 'VP_ONLY', 'BLOCKED') AS status, only_users.pin_hash AS pin, only_users.info_acknowledged FROM vp_users vp JOIN vp_only_users only_users ON only_users.user_id = vp.id LEFT JOIN users calendar_user ON LOWER(calendar_user.username) = LOWER(vp.username) WHERE LOWER(vp.username) = LOWER(?) AND calendar_user.username IS NULL`, [uname]);
+      if (!vpRows.length) return null;
+      return { username: vpRows[0].username, courses: [], pin: vpRows[0].pin || undefined, status: vpRows[0].status, className: String(vpRows[0].class_name || '11'), infoAcknowledged: !!vpRows[0].info_acknowledged, preferences: { ...DEFAULT_PREFERENCES } };
+    }
     const row = rows[0];
     const rawCourses = typeof row.courses === 'string' ? JSON.parse(row.courses || '[]') : (row.courses || []);
     const normalizedCourses = Array.from(new Set(rawCourses.map((c: string) => c === 'Chor' ? 'CHO' : c)));
@@ -565,6 +574,7 @@ export async function dbGetUser(username: string) {
       courses: normalizedCourses,
       pin: row.pin || undefined,
       status: row.status || 'ACTIVE',
+      infoAcknowledged: !!row.info_acknowledged,
       className: String(row.class_name || '11'),
       preferences: { ...DEFAULT_PREFERENCES, ...parsedPreferences, themeMode }
     };
@@ -576,6 +586,7 @@ export async function dbGetUser(username: string) {
     courses: memoryUser.courses || [],
     pin: memoryUser.pin || undefined,
     status: memoryUser.status || 'ACTIVE',
+    infoAcknowledged: !!memoryUser.infoAcknowledged,
     className: memoryUser.className || '11',
     preferences: { ...DEFAULT_PREFERENCES, ...(memoryUser.preferences || {}) }
   };
@@ -605,6 +616,38 @@ export async function dbGetUsers() {
     status: memoryStore.users[uname].status || 'ACTIVE',
     vpOnly: false,
   }));
+}
+
+export async function dbAcknowledgeInfo(username: string) {
+  const uname = username.toLowerCase();
+  if (isConnected && pool) {
+    await pool.query('UPDATE users SET info_acknowledged = 1 WHERE LOWER(username) = LOWER(?)', [uname]);
+    return;
+  }
+  if (memoryStore.users[uname]) memoryStore.users[uname].infoAcknowledged = true;
+}
+
+export async function dbSetInfoAcknowledged(username: string, acknowledged: boolean) {
+  const uname = username.toLowerCase();
+  if (isConnected && pool) {
+    await pool.query('UPDATE users SET info_acknowledged = ? WHERE LOWER(username) = LOWER(?)', [acknowledged ? 1 : 0, uname]);
+    const [onlyTables]: any = await pool.query("SHOW TABLES LIKE 'vp_only_users'");
+    const [vpTables]: any = await pool.query("SHOW TABLES LIKE 'vp_users'");
+    if (onlyTables.length && vpTables.length) {
+      const [rows]: any = await pool.query(`SELECT only_users.user_id FROM vp_only_users only_users JOIN vp_users vp ON vp.id = only_users.user_id LEFT JOIN users calendar_user ON LOWER(calendar_user.username) = LOWER(vp.username) WHERE LOWER(vp.username) = LOWER(?) AND calendar_user.username IS NULL`, [uname]);
+      if (rows.length) await pool.query('UPDATE vp_only_users SET info_acknowledged = ? WHERE user_id = ?', [acknowledged ? 1 : 0, rows[0].user_id]);
+    }
+    return;
+  }
+  if (memoryStore.users[uname]) memoryStore.users[uname].infoAcknowledged = acknowledged;
+}
+
+export async function dbSetVpOnlyInfoAcknowledged(username: string, acknowledged: boolean) {
+  const uname = username.toLowerCase();
+  if (isConnected && pool) {
+    await pool.query(`UPDATE vp_only_users only_users JOIN vp_users vp ON vp.id = only_users.user_id LEFT JOIN users calendar_user ON LOWER(calendar_user.username) = LOWER(vp.username) SET only_users.info_acknowledged = ? WHERE LOWER(vp.username) = LOWER(?) AND calendar_user.username IS NULL`, [acknowledged ? 1 : 0, uname]);
+    return;
+  } else if (memoryStore.users[uname]) memoryStore.users[uname].infoAcknowledged = acknowledged;
 }
 
 export async function dbSaveUser(username: string, data: { courses?: string[]; pin?: string | null; preferences?: any; status?: string; className?: string }) {
@@ -637,10 +680,10 @@ export async function dbSaveUser(username: string, data: { courses?: string[]; p
 
   if (isConnected && pool) {
     await pool.query(
-      `INSERT INTO users (username, courses, pin, preferences, status, class_name) 
-       VALUES (?, ?, ?, ?, ?, ?) 
+      `INSERT INTO users (username, courses, pin, preferences, status, class_name, info_acknowledged)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE courses = VALUES(courses), pin = VALUES(pin), preferences = VALUES(preferences), status = VALUES(status), class_name = VALUES(class_name)`,
-      [uname, JSON.stringify(courses), hashedPin, JSON.stringify(preferences), status, className]
+      [uname, JSON.stringify(courses), hashedPin, JSON.stringify(preferences), status, className, existing?.infoAcknowledged ? 1 : 0]
     );
     // Calendar `users.pin` is authoritative. Keep the legacy VP column only
     // for rolling compatibility and VP-only account migration.
@@ -685,7 +728,7 @@ export async function dbSaveUser(username: string, data: { courses?: string[]; p
         if (error?.code !== 'ER_NO_SUCH_TABLE') throw error;
       }
     }
-    return { username: uname, courses, pin: hashedPin || undefined, preferences, status, className };
+    return { username: uname, courses, pin: hashedPin || undefined, preferences, status, className, infoAcknowledged: !!existing?.infoAcknowledged };
   }
 
   memoryStore.users[uname] = {
@@ -694,6 +737,7 @@ export async function dbSaveUser(username: string, data: { courses?: string[]; p
     preferences,
     status,
     className,
+    infoAcknowledged: existing?.infoAcknowledged || false,
   };
   return { username: uname, ...memoryStore.users[uname] };
 }
@@ -948,8 +992,9 @@ export async function dbDeletePrivateCategory(username: string, categoryId: stri
 export async function dbCreatePrivateEvent(username: string, event: any) {
   return withPrivateMutation(username, async () => {
     const data = await dbLoadPrivateCalendar(username);
-    if (!data.categories.some(c => c.id === event.type)) return null;
-    data.events.push({ ...event, endDate: event.endDate || event.date, courseId: 'ALLGEMEIN', author: username.toLowerCase(), updatedAt: new Date().toISOString() });
+    const category = data.categories.find(c => c.id === event.type);
+    if (!category) return null;
+    data.events.push({ ...event, endDate: event.endDate || event.date, courseId: `PRIVATE:${category.name}`, author: username.toLowerCase(), updatedAt: new Date().toISOString() });
     await dbStorePrivateCalendar(username, data);
     return data.events.at(-1);
   });
@@ -961,8 +1006,9 @@ export async function dbUpdatePrivateEvent(username: string, id: string, update:
     const index = data.events.findIndex(e => e.id === id);
     if (index < 0) return null;
     const nextType = update.type ?? data.events[index].type;
-    if (!data.categories.some(c => c.id === nextType)) throw new Error('PRIVATE_CATEGORY_FORBIDDEN');
-    const nextEvent = { ...data.events[index], ...update, id, courseId: 'ALLGEMEIN', author: username.toLowerCase(), updatedAt: new Date().toISOString() };
+    const category = data.categories.find(c => c.id === nextType);
+    if (!category) throw new Error('PRIVATE_CATEGORY_FORBIDDEN');
+    const nextEvent = { ...data.events[index], ...update, id, courseId: `PRIVATE:${category.name}`, author: username.toLowerCase(), updatedAt: new Date().toISOString() };
     if (!nextEvent.endDate || nextEvent.endDate < nextEvent.date) nextEvent.endDate = nextEvent.date;
     data.events[index] = nextEvent;
     await dbStorePrivateCalendar(username, data);

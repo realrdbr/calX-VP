@@ -6,6 +6,7 @@ from lesson_status import has_value
 
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
+from types import SimpleNamespace
 from email.header import Header
 import hashlib
 import logging
@@ -137,6 +138,28 @@ def available_class_names_from_plans(plans: Iterable[object | None]) -> list[str
     return sorted(classes, key=class_sort_key)
 
 
+def available_teacher_names_from_plans(plans: Iterable[object | None]) -> list[str]:
+    teachers: set[str] = set()
+    def add_teacher(value: str | None) -> None:
+        if has_value(value):
+            teachers.add(re.sub(r"\s+", " ", value.strip()))
+
+    for plan in plans:
+        if plan is None:
+            continue
+        for name in getattr(plan, "lehrer", {}).keys():
+            add_teacher(name)
+        for class_item in getattr(plan, "klassen", {}).values():
+            for lessons in getattr(class_item, "stunden", {}).values():
+                for lesson in lessons:
+                    for name in getattr(lesson, "lehrer", ()):
+                        add_teacher(name)
+            for course in getattr(class_item, "kurse", {}).values():
+                name = getattr(course, "lehrer", None)
+                add_teacher(name)
+    return sorted(teachers, key=lambda name: (name.casefold(), name))
+
+
 class SubscriptionNotifier:
     """Erstellt persönliche Nachrichten und dedupliziert sie persistent pro Nutzer."""
 
@@ -237,16 +260,70 @@ class SubscriptionNotifier:
             entries.append((class_name, self._lesson_text(class_item, lessons)))
         return entries
 
+    @staticmethod
+    def _teacher_lessons(class_item: object, lessons: Iterable[object], teacher_name: str) -> list[object]:
+        selected = []
+        for lesson in lessons:
+            teachers = set(getattr(lesson, "lehrer", ()) or ())
+            if not teachers:
+                course = getattr(class_item, "kurse", {}).get(getattr(lesson, "kursnummer", None))
+                teacher = getattr(course, "lehrer", None) if course is not None else None
+                if teacher:
+                    teachers.add(teacher)
+            if teacher_name in teachers:
+                selected.append(lesson)
+        return selected
+
+    def _teacher_block_entries(self, recipient: NotificationRecipient, plan: object, block: Block) -> list[tuple[str, str]]:
+        entries: list[tuple[str, str]] = []
+        for teacher_name in recipient.selected_teachers:
+            teacher_item = getattr(plan, "lehrer", {}).get(teacher_name)
+            if teacher_item is not None:
+                lessons = self._block_lessons(teacher_item, block)
+                if lessons:
+                    entries.append((teacher_name, self._lesson_text(teacher_item, lessons)))
+                continue
+
+            # Some day plans only expose class tables. Derive the teacher view
+            # from those rows, retaining each class's course metadata for
+            # cancelled lessons and subject labels.
+            lessons = []
+            for class_item in getattr(plan, "klassen", {}).values():
+                lessons.extend(
+                    (class_item, lesson)
+                    for lesson in self._teacher_lessons(class_item, self._block_lessons(class_item, block), teacher_name)
+                )
+            if lessons:
+                unique: dict[int, tuple[object, object]] = {}
+                for class_item, lesson in lessons:
+                    unique.setdefault(id(lesson), (class_item, lesson))
+                rendered = list(dict.fromkeys(
+                    self._lesson_text(class_item, [lesson])
+                    for class_item, lesson in unique.values()
+                ))
+                entries.append((teacher_name, "; ".join(rendered)))
+        return entries
+
     def _daily_summary_lines(self, recipient: NotificationRecipient, plan: object) -> list[str]:
-        include_class_name = len(recipient.selected_classes) > 1
+        targets = [("class", name) for name in recipient.selected_classes if recipient.subject_selections.get(name)]
+        targets.extend(("teacher", name) for name in recipient.selected_teachers)
+        if len(targets) == 1:
+            return self._daily_summary_lines_for_target(recipient, plan, *targets[0])
+        return []
+
+    def _daily_summary_lines_for_target(self, recipient: NotificationRecipient, plan: object, target_type: str, target: str) -> list[str]:
         lines: list[str] = []
         free_blocks: list[str] = []
         for block in self.blocks:
-            entries = self._class_block_entries(recipient, plan, block)
+            if target_type == "class":
+                target_recipient = NotificationRecipient(recipient.user, (target,), {target: recipient.subject_selections.get(target, set())}, recipient.notify_settings, recipient.calendar_courses)
+                entries = self._class_block_entries(target_recipient, plan, block)
+            else:
+                entries = self._teacher_block_entries(NotificationRecipient(recipient.user, (), {}, recipient.notify_settings, recipient.calendar_courses, (target,)), plan, block)
             if entries:
                 lines.extend(free_blocks)
                 free_blocks.clear()
-                lines.append(self._format_block_line(block.number, entries, include_class_name=include_class_name))
+                lines.append(f"{block.number}. Block: {entries[0][1]}")
             else:
                 free_blocks.append(f"{block.number}. Block: -")
         return lines
@@ -259,6 +336,32 @@ class SubscriptionNotifier:
             if entries:
                 lines.append(self._format_block_line(block.number, entries, include_class_name=include_class_name))
         return lines
+
+    def _change_lines_for_target(self, recipient: NotificationRecipient, plan: object, target_type: str, target: str) -> list[str]:
+        lines: list[str] = []
+        if target_type == "class":
+            target_recipient = NotificationRecipient(recipient.user, (target,), {target: recipient.subject_selections.get(target, set())}, recipient.notify_settings, recipient.calendar_courses)
+            for block in self.blocks:
+                entries = self._class_block_entries(target_recipient, plan, block, changed_only=True)
+                if entries:
+                    lines.append(self._format_block_line(block.number, entries, include_class_name=False))
+        else:
+            target_recipient = NotificationRecipient(recipient.user, (), {}, recipient.notify_settings, recipient.calendar_courses, (target,))
+            for block in self.blocks:
+                entries = [(name, text) for name, text in self._teacher_block_entries(target_recipient, plan, block)
+                           if any(getattr(lesson, "änderung", False) for lesson in self._teacher_lessons_for_block(plan, block, name))]
+                if entries:
+                    lines.append(f"{block.number}. Block: {entries[0][1]}")
+        return lines
+
+    def _teacher_lessons_for_block(self, plan: object, block: Block, teacher_name: str) -> list[object]:
+        teacher_item = getattr(plan, "lehrer", {}).get(teacher_name)
+        if teacher_item is not None:
+            return self._block_lessons(teacher_item, block)
+        lessons = []
+        for class_item in getattr(plan, "klassen", {}).values():
+            lessons.extend(self._teacher_lessons(class_item, self._block_lessons(class_item, block), teacher_name))
+        return list({id(lesson): lesson for lesson in lessons}.values())
 
     def _next_block_notification(self, recipient: NotificationRecipient, plan: object, trigger_time: time) -> tuple[int, str, str] | None:
         include_class_name = len(recipient.selected_classes) > 1
@@ -294,6 +397,25 @@ class SubscriptionNotifier:
                     if include_class_name else entries[0][1]
                 ),
             )
+        return None
+
+    def _next_block_notification_for_target(self, recipient: NotificationRecipient, plan: object, trigger_time: time, target_type: str, target: str) -> tuple[int, str, str] | None:
+        for block in self.blocks:
+            block_start = self._period_start(plan, block)
+            if block_start is None or block_start <= trigger_time:
+                continue
+            if target_type == "class":
+                scoped = NotificationRecipient(recipient.user, (target,), {target: recipient.subject_selections.get(target, set())}, recipient.notify_settings, recipient.calendar_courses)
+                entries = self._class_block_entries(scoped, plan, block)
+            else:
+                scoped = NotificationRecipient(recipient.user, (), {}, recipient.notify_settings, recipient.calendar_courses, (target,))
+                entries = self._teacher_block_entries(scoped, plan, block)
+            if not entries:
+                continue
+            text = entries[0][1]
+            rooms = sorted({room for lesson in self._teacher_lessons_for_block(plan, block, target) for room in getattr(lesson, "räume", ()) if room}) if target_type == "teacher" else sorted({room for lesson in matching_lessons(getattr(plan, "klassen", {}).get(target), self._block_lessons(getattr(plan, "klassen", {}).get(target), block), recipient.subject_selections.get(target, set())) for room in getattr(lesson, "räume", ()) if room})
+            label = f"Klasse {target}" if target_type == "class" else target
+            return block.number, f"(VPrintfy) {label} · Nächster Raum: {', '.join(rooms) or 'Freistunde'}", f"Nächster ({block.number}.) Block: {text}"
         return None
 
     @staticmethod
@@ -520,7 +642,9 @@ class SubscriptionNotifier:
             # never receive calendar-derived notifications, even if an old DB
             # still contains stale calendar notification settings for them.
             has_subject_selection = any(recipient.subject_selections.values())
-            if settings.lesson_notifications_enabled and has_subject_selection:
+            lesson_targets = [("class", name) for name in recipient.selected_classes if recipient.subject_selections.get(name)]
+            lesson_targets.extend(("teacher", name) for name in recipient.selected_teachers)
+            if settings.lesson_notifications_enabled and lesson_targets:
                 raw_times = settings.lesson_notification_times or DEFAULT_LESSON_NOTIFICATION_TIMES
                 summary_time_text = raw_times[0]
                 summary_time = self._time_from_text(summary_time_text)
@@ -528,30 +652,41 @@ class SubscriptionNotifier:
                 summary_date = getattr(summary_plan, "datum", None) or plan_date
                 summary_due = now.time() >= summary_time and summary_date.weekday() < 5
                 if summary_due:
-                    lines = self._daily_summary_lines(recipient, summary_plan)
-                    if lines:
-                        sent += self._deliver(
-                            user,
-                            f"morning:{summary_date.isoformat()}" if not settings.daily_summary_day_before else f"morning-day-before:{summary_date.isoformat()}",
-                            ("Morgen, " if settings.daily_summary_day_before else "Heute, ") + summary_date.strftime("%d.%m.%Y") + ":\n" + "\n".join(lines),
-                            "(VPrintfy) " + ("Morgen" if settings.daily_summary_day_before else "Heute"),
-                        )
+                    for target_type, target in lesson_targets:
+                        lines = self._daily_summary_lines_for_target(recipient, summary_plan, target_type, target)
+                        if lines:
+                            target_label = f"Klasse {target}" if target_type == "class" else target
+                            sent += self._deliver(
+                                user,
+                                f"morning:{summary_date.isoformat()}:{'day-before:' if settings.daily_summary_day_before else ''}{target_type}:{quote(target, safe='')}",
+                                ("Morgen, " if settings.daily_summary_day_before else "Heute, ") + summary_date.strftime("%d.%m.%Y") + ":\n" + "\n".join(lines),
+                                f"(VPrintfy) {target_label} · " + ("Morgen" if settings.daily_summary_day_before else "Heute"),
+                            )
                 timestamp = getattr(plan, "zeitstempel", None)
-                if timestamp and any(class_name in changed_classes for class_name in recipient.selected_classes):
-                    changes = self._change_lines(recipient, plan)
-                    if changes:
-                        signature = "|".join(
-                            f"{class_name}:{self._plan_signature(getattr(plan, 'klassen', {})[class_name])}"
-                            for class_name in recipient.selected_classes
-                            if class_name in getattr(plan, "klassen", {})
-                        )
-                        sent += self._deliver(
-                            user,
-                            f"publication:{plan_date.isoformat()}:{signature}",
-                            "Plan veröffentlicht/aktualisiert (" + timestamp.strftime("%d.%m.%Y %H:%M") + "):\n" + "\n".join(changes),
-                            "(VPrintfy) Plan-Änderung",
-                            "high",
-                        )
+                if timestamp:
+                    for target_type, target in lesson_targets:
+                        if target_type == "class" and target not in changed_classes:
+                            continue
+                        changes = self._change_lines_for_target(recipient, plan, target_type, target)
+                        if changes:
+                            target_label = f"Klasse {target}" if target_type == "class" else target
+                            if target_type == "class" and target in getattr(plan, "klassen", {}):
+                                target_signature = self._plan_signature(getattr(plan, "klassen", {})[target])
+                            elif target_type == "teacher" and target in getattr(plan, "lehrer", {}):
+                                target_signature = self._plan_signature(getattr(plan, "lehrer", {})[target])
+                            else:
+                                target_signature = hashlib.sha256(repr(tuple(
+                                    (period, tuple(self._lesson_text(class_item, [lesson]) for lesson in self._teacher_lessons(class_item, lessons, target)))
+                                    for class_item in getattr(plan, "klassen", {}).values()
+                                    for period, lessons in sorted(getattr(class_item, "stunden", {}).items())
+                                )).encode()).hexdigest()
+                            sent += self._deliver(
+                                user,
+                                f"publication:{plan_date.isoformat()}:{target_type}:{quote(target, safe='')}:{target_signature}",
+                                "Plan veröffentlicht/aktualisiert (" + timestamp.strftime("%d.%m.%Y %H:%M") + "):\n" + "\n".join(changes),
+                                f"(VPrintfy) {target_label} · Plan-Änderung",
+                                "high",
+                            )
                 block_times = sorted(
                     [(value, self._time_from_text(value)) for value in dict.fromkeys(raw_times[1:])],
                     key=lambda item: item[1],
@@ -567,16 +702,17 @@ class SubscriptionNotifier:
                             # verfügbar war) - lieber auslassen als eine sehr
                             # verspätete Benachrichtigung zu versenden.
                             continue
-                        notification = self._next_block_notification(recipient, plan, trigger_time)
-                        if notification is None:
-                            continue
-                        sent += self._deliver(
-                            user,
-                            f"next:{plan_date.isoformat()}:{notification[0]}",
-                            notification[2],
-                            notification[1],
-                            "high",
-                        )
+                        for target_type, target in lesson_targets:
+                            notification = self._next_block_notification_for_target(recipient, plan, trigger_time, target_type, target)
+                            if notification is None:
+                                continue
+                            sent += self._deliver(
+                                user,
+                                f"next:{plan_date.isoformat()}:{target_type}:{quote(target, safe='')}:{notification[0]}",
+                                notification[2],
+                                notification[1],
+                                "high",
+                            )
             if not user.vp_only and settings.calendar_notifications_enabled and settings.calendar_notification_types:
                 selected_types = set(settings.calendar_notification_types)
                 for event in self.store.get_calendar_events(user.username):

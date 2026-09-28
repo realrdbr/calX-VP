@@ -5,10 +5,14 @@ interface Props {
   isOpen: boolean;
   onClose: () => void;
   themeMode?: 'light' | 'dark' | 'system';
+  required?: boolean;
+  onAcknowledge?: () => Promise<void>;
 }
 
-export default function InfoModal({ isOpen, onClose, themeMode = 'system' }: Props) {
+export default function InfoModal({ isOpen, onClose, themeMode = 'system', required = false, onAcknowledge }: Props) {
   const [supportMail, setSupportMail] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     if (isOpen) {
@@ -17,9 +21,18 @@ export default function InfoModal({ isOpen, onClose, themeMode = 'system' }: Pro
         .then(data => setSupportMail(data.supportMail)).catch(() => setSupportMail('Kontakt derzeit nicht verfügbar'));
     } else if (dialog.current?.open) dialog.current.close();
   }, [isOpen]);
+  const acknowledge = async () => {
+    if (required && onAcknowledge) {
+      setSaving(true);
+      setError('');
+      try { await onAcknowledge(); onClose(); }
+      catch (reason) { setError(reason instanceof Error ? reason.message : 'Bestätigung konnte nicht gespeichert werden.'); }
+      finally { setSaving(false); }
+    } else onClose();
+  };
   return <dialog ref={dialog} className="info-dialog" data-ui-theme={themeMode} aria-label="Info"
-    onCancel={onClose} onClose={onClose} onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
-    <div className="info-head"><h2>Info</h2><button type="button" className="info-close" onClick={onClose} aria-label="Schließen">✕</button></div>
+    onCancel={event => { if (required) event.preventDefault(); else onClose(); }} onClose={() => { if (!required) onClose(); }} onClick={event => { if (event.target === event.currentTarget && !required) onClose(); }}>
+    <div className="info-head"><h2>Info</h2>{!required && <button type="button" className="info-close" onClick={onClose} aria-label="Schließen">✕</button>}</div>
     <div className="info-content">
       {info.paragraphs.map(paragraph => <p key={paragraph}>{paragraph}</p>)}
       <p>{info.supportPrefix} {supportMail || 'Kontakt wird geladen …'}.</p>
@@ -27,6 +40,7 @@ export default function InfoModal({ isOpen, onClose, themeMode = 'system' }: Pro
       <p>{info.license}</p>
       <nav className="legal-links" aria-label="Rechtliches"><a className="legal-link" href="/datenschutz">Datenschutz</a><a className="legal-link" href="/impressum">Impressum</a></nav>
     </div>
-    <button type="button" className="info-submit" onClick={onClose}>Schließen</button>
+    {error && <p role="alert" className="info-error">{error}</p>}
+    <button type="button" className="info-submit" disabled={saving} onClick={() => void acknowledge()}>{saving ? 'Wird gespeichert …' : required ? 'Als gelesen markieren' : 'Schließen'}</button>
   </dialog>;
 }

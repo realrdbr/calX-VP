@@ -44,6 +44,12 @@ export async function logoutSession() {
   await fetch(`${API_URL}/api/logout`, { method: 'POST', headers: getHeaders(), credentials: 'same-origin' });
 }
 
+export async function acknowledgeInfo() {
+  const res = await fetch(`${API_URL}/api/info/acknowledge`, { method: 'POST', headers: getHeaders(), credentials: 'same-origin' });
+  if (!res.ok) throw new Error(await readError(res, 'Info-Bestätigung konnte nicht gespeichert werden.'));
+  return res.json();
+}
+
 export async function registerUser(username: string, pin?: string) {
   const res = await fetch(`${API_URL}/api/register`, {
     method: 'POST',

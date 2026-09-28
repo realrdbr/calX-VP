@@ -206,7 +206,10 @@ def render_subscriptions(
     pin_modal_error: str | None = None,
     pin_modal_changed: bool = False,
     session_username: str | None = None,
+    teacher_options: list[str] | None = None,
+    selected_teachers: tuple[str, ...] = (),
 ) -> str:
+    teacher_options = teacher_options or []
     message = '<p class="notice success">Deine Auswahl wurde gespeichert.</p>' if saved else ""
     if test_sent:
         message = '<p class="notice success">Die Testbenachrichtigung wurde gesendet.</p>'
@@ -220,7 +223,7 @@ def render_subscriptions(
     )
 
     subject_sections = []
-    first_selected_class = selected_classes[0] if selected_classes else (class_options[0] if class_options else None)
+    first_selected_class = selected_classes[0] if selected_classes else (class_options[0] if class_options and not selected_teachers else None)
     for class_name in class_options:
         field_name = f"subject__{quote(class_name, safe='')}"
         options = subject_options_by_class.get(class_name, [])
@@ -234,6 +237,11 @@ def render_subscriptions(
             f'<div class="subject-list">{checkboxes}</div></div>'
         )
 
+    teacher_section = '<div class="subject-card" role="tabpanel" data-teacher-panel hidden><h3>Unterrichtseinheiten · Lehrer</h3><p class="muted">Wähle aus, für welche Lehrkräfte du Benachrichtigungen erhalten möchtest.</p><div class="subject-list">' + "".join(
+        _choice_checkbox("teacher_name", teacher, teacher, checked=teacher in selected_teachers)
+        for teacher in teacher_options
+    ) + '</div></div>' if teacher_options else '<div class="subject-card" role="tabpanel" data-teacher-panel hidden><h3>Unterrichtseinheiten · Lehrer</h3><p class="muted">Im aktuellen Plan sind keine Lehrkräfte verfügbar.</p></div>'
+
     event_type_checkboxes = "".join(
         '<div class="calendar-row">'
         + _choice_checkbox("calendar_event_type", option.id, option.label, checked=option.id in notify_settings.calendar_notification_types)
@@ -246,9 +254,10 @@ def render_subscriptions(
 
     topic_url = f"{ntfy_url.rstrip('/')}/{user.ntfy_topic}"
     class_select_options = "".join(
-        f'<option value="{escape(class_name)}"{" selected" if class_name == first_selected_class else ""}>{escape(class_name)}</option>'
+        f'<option value="{escape(class_name)}"{" selected" if class_name == first_selected_class and selected_classes else ""}>{escape(class_name)}</option>'
         for class_name in class_options
     )
+    class_select_options += f'<option value="__teachers__"{" selected" if not selected_classes and selected_teachers else ""}>Lehrer</option>'
     lesson_time_inputs = "".join(
         f'<label class="time-tab"><span class="time-label">{"Tagesübersicht" if index == 0 else f"Nächste Stunde {index}"}</span>'
         f'<input type="time" name="lesson_notification_time" value="{escape(value)}" required step="60">'
@@ -284,7 +293,7 @@ def render_subscriptions(
           <article class=\"settings-card\">
             <div class=\"settings-card-header\"><div><div class=\"settings-kicker\">Fächer</div><h2>Je Klasse</h2></div></div>
             <label class=\"class-select-label\">Klasse anzeigen<select class=\"class-select\" data-class-select>{class_select_options}</select></label>
-            {''.join(subject_sections)}
+            {''.join(subject_sections)}{teacher_section}
           </article>
           {calendar_card}
         </div>
@@ -304,12 +313,16 @@ def render_subscriptions(
       (() => {{
         const classInputs = [...document.querySelectorAll('[data-class-input]')];
         const panels = [...document.querySelectorAll('[data-class-panel]')];
+        const teacherPanel = document.querySelector('[data-teacher-panel]');
         const classSelect = document.querySelector('[data-class-select]');
 
         const activate = (className) => {{
           panels.forEach((panel) => panel.hidden = panel.dataset.classPanel !== className);
+          if (teacherPanel) teacherPanel.hidden = className !== '__teachers__';
           if (classSelect) classSelect.value = className;
         }};
+
+        const initialValue = classSelect && classSelect.value ? classSelect.value : (classInputs.find((item) => item.checked)?.value || '__teachers__');
 
         const syncClassSelection = (className) => {{
           const panel = panels.find((item) => item.dataset.classPanel === className);
@@ -319,8 +332,11 @@ def render_subscriptions(
         }};
 
         panels.forEach((panel) => panel.addEventListener('change', () => syncClassSelection(panel.dataset.classPanel)));
+        if (teacherPanel) teacherPanel.addEventListener('change', () => {{
+          if (classSelect && [...teacherPanel.querySelectorAll('input[type="checkbox"]')].some((item) => item.checked)) classSelect.value = '__teachers__';
+        }});
         if (classSelect) classSelect.addEventListener('change', () => activate(classSelect.value));
-        if (classSelect) activate(classSelect.value);
+        if (classSelect) activate(initialValue);
       }})();
     </script>
     """)

@@ -25,10 +25,10 @@ from ntfy.diagnostics import configure_logging, emit, endpoint, error_fields
 from ntfy.service import NtfyService, resolve_ntfy_internal_url
 from plan_page import get_available_classes, get_selected_class_cookie_name, get_selected_subject_cookie_name, get_week_plans_for_page, get_week_version, render_plan_page, resolve_initial_class
 from rooms_page import describe_room_plan, get_room_plan_for_page, get_free_rooms_for_page, get_room_plan_version, render_rooms_page, warm_free_room_results_from_cache
-from subscriptions import SubscriptionNotifier, available_class_names_from_plans, subject_key, subject_options_from_plans
+from subscriptions import SubscriptionNotifier, available_class_names_from_plans, available_teacher_names_from_plans, subject_key, subject_options_from_plans
 from teacher_page import render_teacher_page
 from room_schedule_page import render_room_schedule_page
-from vp_data import ResourceNotFound, Unauthorized, fetch_plan, get_cached_plan_for_page, get_plan_for_page, get_subject_catalog_plans, get_subject_catalog_plans_for_page, log, warm_page_caches_from_disk
+from vp_data import ResourceNotFound, Unauthorized, get_cached_plan_for_page, get_plan_for_page, get_subject_catalog_plans, get_subject_catalog_plans_for_page, log, warm_page_caches_from_disk
 from web_utils import cookie_values, format_week_value, join_cookie_list, make_cookie, parse_cookie_header, parse_hour, parse_week, query_value, query_values, redirect, send_html, split_cookie_list
 
 
@@ -152,10 +152,9 @@ class NotificationWorker(Thread):
 
         Nutzt zuerst den bereits vom Web-Frontend gepflegten, gedrosselten
         Cache (`get_cached_plan_for_page`), der nie blockiert und den letzten
-        bekannten guten Plan sofort liefert. Nur wenn dieser Cache komplett
-        leer ist (z.B. direkt nach einem Kaltstart), wird einmalig ein
-        Live-Abruf versucht; schlägt auch der fehl, wird ein leerer Stub
-        zurückgegeben, damit der Worker nicht abstürzt.
+        bekannten guten Plan sofort liefert. Ist dieser Cache leer, wird ein
+        Hintergrundabruf gestartet und der Worker verarbeitet bis dahin einen
+        leeren Stub.
         """
 
         try:
@@ -167,15 +166,17 @@ class NotificationWorker(Thread):
         if cached_plan is not None:
             return cached_plan
 
-        try:
-            return fetch_plan(plan_date)
-        except Exception as error:
-            log(f"Planabruf für Benachrichtigungen fehlgeschlagen; Kalender läuft weiter: {error}")
-            return SimpleNamespace(datum=plan_date, zeitstempel=None, zeitplan={}, klassen={})
+        # get_cached_plan_for_page already schedules the daily and weekly
+        # refreshes. Never duplicate those network requests synchronously from
+        # the notification thread: on a cold start this used to block the
+        # worker while it fetched today and tomorrow one after another, at the
+        # same time the first browser request was loading the VP page.
+        return SimpleNamespace(datum=plan_date, zeitstempel=None, zeitplan={}, klassen={})
 
     def run(self) -> None:
         heartbeat_at = 0.0
         log_cleanup_at = 0.0
+        session_cleanup_at = time.monotonic() + 3600
         zone = ZoneInfo(os.getenv("APP_TIMEZONE", "Europe/Berlin"))
         emit("ntfy.worker_started", interval_seconds=self.interval, timezone=str(zone),
              internal_endpoint=endpoint(self.notifier.ntfy_url),
@@ -187,6 +188,9 @@ class NotificationWorker(Thread):
                 if started >= log_cleanup_at:
                     self.store.delete_expired_login_attempts()
                     log_cleanup_at = started + 3600
+                if started >= session_cleanup_at:
+                    self.store.delete_expired_sessions()
+                    session_cleanup_at = started + 3600
                 local_now = datetime.now(zone).replace(tzinfo=None)
                 deleted = self.notifier.delete_expired_client_notifications(local_now)
                 if deleted:
@@ -325,7 +329,12 @@ class AppRequestHandler(BaseHTTPRequestHandler):
             else:
                 send_html(self, render_login())
             return
+        session_started = time.monotonic()
         session = self._session()
+        session_duration_ms = round((time.monotonic() - session_started) * 1000)
+        if session_duration_ms >= 250:
+            emit("vp.request_stage_slow", level=30, route=parsed.path,
+                 stage="session_lookup", duration_ms=session_duration_ms)
         if session is None:
             redirect(self, "/login")
             return
@@ -335,7 +344,10 @@ class AppRequestHandler(BaseHTTPRequestHandler):
         if parsed.path in ("/", "/lehrer", "/raeume"):
             from school_calendar import refresh_school_weeks, school_week
             import vp_data
-            refresh_school_weeks(vp_data.SCHULNUMMER, vp_data.BENUTZERNAME, vp_data.PASSWORT, vp_data.CACHE_DIR)
+            refresh_school_weeks(
+                vp_data.SCHULNUMMER, vp_data.BENUTZERNAME, vp_data.PASSWORT,
+                vp_data.CACHE_DIR, background=True,
+            )
             if parsed.path == "/raeume" and (query_value(query, "frei") == "1" or query_value(query, "datum") is not None):
                 from urllib.parse import urlencode
                 from web_utils import parse_date
@@ -381,7 +393,12 @@ class AppRequestHandler(BaseHTTPRequestHandler):
         if parsed.path == "/lehrer":
             self.handle_teacher_page(query)
             return
+        page_started = time.monotonic()
         self.handle_plan_page(query)
+        page_duration_ms = round((time.monotonic() - page_started) * 1000)
+        if page_duration_ms >= 250:
+            emit("vp.request_stage_slow", level=30, route=parsed.path,
+                 stage="plan_page", duration_ms=page_duration_ms)
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
@@ -417,11 +434,27 @@ class AppRequestHandler(BaseHTTPRequestHandler):
             if len(pin) != 4 or not pin.isascii() or not pin.isdigit():
                 send_html(self, render_login("Die PIN muss aus genau vier Ziffern bestehen.", username=username, pin_step=True))
                 return
-            user = self.store.authenticate(username, pin, self._client_ip())
+            client_ip_started = time.monotonic()
+            login_ip = self._client_ip()
+            client_ip_duration_ms = round((time.monotonic() - client_ip_started) * 1000)
+            if client_ip_duration_ms >= 250:
+                emit("vp.request_stage_slow", level=30, route="/login",
+                     stage="client_ip", duration_ms=client_ip_duration_ms)
+            auth_started = time.monotonic()
+            user = self.store.authenticate(username, pin, login_ip)
+            auth_duration_ms = round((time.monotonic() - auth_started) * 1000)
+            if auth_duration_ms >= 250:
+                emit("vp.request_stage_slow", level=30, route="/login",
+                     stage="authenticate", duration_ms=auth_duration_ms)
             if user is None:
                 send_html(self, render_login("PIN falsch oder Anmeldung vorübergehend gesperrt.", username=username, pin_step=True))
                 return
+            session_started = time.monotonic()
             token, _csrf = self.store.create_session(user.id)
+            create_session_duration_ms = round((time.monotonic() - session_started) * 1000)
+            if create_session_duration_ms >= 250:
+                emit("vp.request_stage_slow", level=30, route="/login",
+                     stage="create_session", duration_ms=create_session_duration_ms)
             redirect(self, "/", session_cookie_headers(token, 14 * 86400))
             return
         session = self._require_session()
@@ -435,6 +468,10 @@ class AppRequestHandler(BaseHTTPRequestHandler):
                 self.store.delete_session(token)
             self.store.delete_user_sessions(session.user.username)
             redirect(self, "/login", session_cookie_headers("", 0))
+            return
+        if path == "/info/gelesen":
+            self.store.acknowledge_info(session.user.username)
+            redirect(self, "/")
             return
         if path == "/pin-aendern":
             if not session.user.vp_only and not session.user.must_change_pin:
@@ -479,9 +516,8 @@ class AppRequestHandler(BaseHTTPRequestHandler):
             try:
                 catalog_plans = get_subject_catalog_plans()
                 available_classes = set(available_class_names_from_plans(catalog_plans))
+                available_teachers = set(available_teacher_names_from_plans(catalog_plans))
                 selected_classes = set(data.get("class_name", []))
-                if not selected_classes:
-                    raise ValueError("Bitte wähle mindestens eine Klasse aus.")
                 if not selected_classes <= available_classes:
                     raise ValueError("Die Klassenauswahl passt nicht zum aktuellen Stundenplan.")
                 subject_selections: dict[str, set[str]] = {}
@@ -492,6 +528,11 @@ class AppRequestHandler(BaseHTTPRequestHandler):
                     if not selected_subjects <= allowed:
                         raise ValueError(f"Die Fachauswahl für Klasse {class_name} passt nicht zum aktuellen Stundenplan.")
                     subject_selections[class_name] = selected_subjects
+                selected_teachers = set(data.get("teacher_name", []))
+                if not selected_teachers <= available_teachers:
+                    raise ValueError("Die Lehrerauswahl passt nicht zum aktuellen Stundenplan.")
+                if not selected_classes and not selected_teachers:
+                    raise ValueError("Bitte wähle mindestens eine Klasse oder Lehrkraft aus.")
                 lesson_times = tuple(
                     value.strip()
                     for value in data.get("lesson_notification_time", [])
@@ -535,7 +576,7 @@ class AppRequestHandler(BaseHTTPRequestHandler):
                 )
                 if settings.calendar_notifications_enabled and not settings.calendar_notification_types:
                     raise ValueError("Bitte wähle mindestens eine Kalender-Kategorie aus.")
-                self.store.save_subscription_preferences(session.user.id, selected_classes, subject_selections, settings)
+                self.store.save_subscription_preferences(session.user.id, selected_classes, subject_selections, settings, selected_teachers)
                 self.render_subscriptions(session, saved=True)
             except Exception as error:
                 self.render_subscriptions(session, error=str(error))
@@ -564,11 +605,20 @@ class AppRequestHandler(BaseHTTPRequestHandler):
         try:
             catalog_plans = get_subject_catalog_plans()
             class_options = available_class_names_from_plans(catalog_plans)
+            teacher_options = available_teacher_names_from_plans(catalog_plans)
             subject_options_by_class = {
                 class_name: subject_options_from_plans(catalog_plans, class_name)
                 for class_name in class_options
             }
-            selected_classes, _ = self.store.get_selected_classes(session.user.id, session.user.class_name)
+            selected_classes, has_selected_classes = self.store.get_selected_classes(session.user.id, session.user.class_name)
+            selected_teachers = self.store.get_selected_teachers(session.user.id)
+            username_teacher = next(
+                (name for name in teacher_options if name.casefold() == session.user.username.strip().casefold()),
+                None,
+            )
+            if username_teacher and not has_selected_classes and not selected_teachers:
+                selected_classes = ()
+                selected_teachers = (username_teacher,)
             stored_subjects, has_subjects = self.store.get_subject_selections(session.user.id, session.user.class_name)
             if has_subjects:
                 selected_subjects_by_class = stored_subjects
@@ -609,6 +659,7 @@ class AppRequestHandler(BaseHTTPRequestHandler):
                 )
         except Exception as exception:
             class_options, subject_options_by_class, selected_classes, selected_subjects_by_class = [], {}, (session.user.class_name,), {}
+            teacher_options, selected_teachers = [], ()
             settings, event_type_options = NotifySettings(), []
             error = error or f"Kursliste konnte nicht geladen werden: {exception}"
         send_html(
@@ -626,6 +677,8 @@ class AppRequestHandler(BaseHTTPRequestHandler):
                 saved,
                 error,
                 test_sent,
+                teacher_options=teacher_options,
+                selected_teachers=selected_teachers,
                 **self._nav_flags(session),
             ),
         )
@@ -773,6 +826,9 @@ class AppRequestHandler(BaseHTTPRequestHandler):
                 pin_modal_changed=pin_modal_changed,
                 **flags,
             )
+        if session and not self.store.info_acknowledged(session.user.username):
+            from legal import render_legal_page
+            html = html.replace("</body>", render_legal_page(info_ack_required=True, info_csrf_token=session.csrf_token) + "</body>", 1)
         send_html(self, html, headers)
 
     def handle_teacher_page(self, query: dict[str, list[str]]) -> None:
