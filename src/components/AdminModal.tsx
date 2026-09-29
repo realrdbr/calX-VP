@@ -176,20 +176,27 @@ export default function AdminModal({ isOpen, onClose, username, preferences }: P
     }
   };
 
-  const handleUpdateStatus = async (uname: string, status: 'ACTIVE' | 'READ_ONLY' | 'BLOCKED') => {
+  const handleUpdateStatus = async (uname: string, status: 'ACTIVE' | 'READ_ONLY' | 'BLOCKED' | 'VP_ONLY') => {
+    const pin = pinEdits[uname] || '';
+    if (pin && !/^\d{4}$/.test(pin)) {
+      alert('Wenn du eine Start-PIN vorgibst, muss sie aus genau vier Ziffern bestehen. Lass das Feld leer, damit der Benutzer selbst eine PIN festlegt.');
+      return;
+    }
     try {
-      await adminUpdateUserStatus(uname, status, adminToken);
-      setUsers(prev => prev.map(u => u.username === uname ? { ...u, status } : u));
+      await adminUpdateUserStatus(uname, status, adminToken, pin || undefined);
+      const fetchedUsers = await adminFetchUsers(adminToken);
+      setUsers(fetchedUsers);
+      if (pin) setPinEdits(prev => ({ ...prev, [uname]: '' }));
     } catch (err) {
       if (!handleAdminRequestError(err)) alert('Fehler beim Speichern');
     }
   };
 
   const handleResetPin = async (uname: string) => {
-    if (!confirm(`PIN von ${uname} wirklich zurücksetzen?\n\nDas wird nicht empfohlen. Ohne PIN entfällt vorübergehend der persönliche PIN-Schutz. Bestehende Sitzungen werden beendet; bei der nächsten Anmeldung muss eine neue vierstellige PIN festgelegt werden.\n\nPrüfe vorher die Identität der Person. Empfohlen: Über „PIN ändern“ eine Start-PIN setzen und sicher persönlich weitergeben.\n\nPIN trotzdem zurücksetzen?`)) return;
+    if (!confirm(`PIN von ${uname} wirklich zurücksetzen?\n\nDas wird nicht empfohlen. Die bisherige PIN wird gelöscht und bestehende Sitzungen werden beendet. Bei der nächsten Anmeldung muss die Person direkt eine neue PIN festlegen.\n\nPrüfe vorher die Identität der Person.\n\nPIN trotzdem zurücksetzen?`)) return;
     try {
       await adminResetUserPin(uname, adminToken);
-      alert(`PIN für ${uname} wurde zurückgesetzt. Bestehende Sitzungen wurden beendet. Bei der nächsten Anmeldung muss eine neue PIN festgelegt werden.`);
+      alert(`Die PIN für ${uname} wurde zurückgesetzt. Bestehende Sitzungen wurden beendet. Bei der nächsten Anmeldung muss eine neue PIN festgelegt werden.`);
     } catch (err) {
       if (!handleAdminRequestError(err)) alert('Fehler beim Zurücksetzen.');
     }
@@ -546,7 +553,7 @@ export default function AdminModal({ isOpen, onClose, username, preferences }: P
 
         <div className="flex flex-1 min-h-0 flex-col sm:flex-row overflow-hidden">
           {/* Sidebar */}
-          <div className={`w-full sm:w-56 shrink-0 border-b sm:border-b-0 sm:border-r ${theme.border} ${theme.bgSidebar} p-2 sm:p-4 flex flex-row sm:flex-col gap-2 overflow-x-auto`}>
+          <div className={`w-full sm:w-56 shrink-0 border-b sm:border-b-0 sm:border-r ${theme.border} ${theme.bgSidebar} p-2 sm:p-4 grid grid-cols-3 sm:flex sm:flex-col gap-2 overflow-hidden`}>
             {[
               { id: 'users', label: 'Benutzer' },
               { id: 'categories', label: 'Kategorien' },
@@ -555,7 +562,7 @@ export default function AdminModal({ isOpen, onClose, username, preferences }: P
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as any)}
-                className={`flex-1 sm:w-full min-w-max text-center sm:text-left px-4 py-2.5 sm:py-3 text-sm font-semibold rounded-xl transition-all ${
+                className={`w-full min-w-0 text-center sm:text-left px-1.5 sm:px-4 py-2.5 sm:py-3 text-xs sm:text-sm leading-tight font-semibold rounded-xl transition-all ${
                   activeTab === tab.id 
                     ? `text-white shadow-xs` 
                     : `${theme.textMuted} ${theme.bgHover}`
@@ -568,7 +575,8 @@ export default function AdminModal({ isOpen, onClose, username, preferences }: P
           </div>
 
           {/* Content */}
-          <div className={`flex-1 min-h-0 p-4 sm:p-6 overflow-y-auto ${theme.bgModal}`}>
+          <div className={`flex-1 min-h-0 min-w-0 p-3 sm:p-5 overflow-y-auto overscroll-contain ${theme.bgModal}`}>
+            <div className="w-full min-w-0">
             {activeTab === 'users' && (
               <div className="space-y-6">
                 <div>
@@ -576,8 +584,8 @@ export default function AdminModal({ isOpen, onClose, username, preferences }: P
                   <p className={`text-sm ${theme.textFaint}`}>Setze PINs zurück oder sperre Benutzer (Lesezugriff oder komplett blockiert).</p>
                 </div>
                 
-                <div className={`grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_90px_105px_auto_auto] items-center gap-3 p-4 border ${theme.border} rounded-xl ${theme.bgInput}`}>
-                  <div className="sm:col-span-2">
+                <div className={`grid grid-cols-[minmax(0,1fr)_minmax(0,0.75fr)] items-center gap-2 sm:gap-3 p-3 sm:p-4 border ${theme.border} rounded-xl ${theme.bgInput}`}>
+                  <div className="col-span-2 min-w-0 sm:col-span-1">
                   <input
                     type="text"
                     value={newUserName}
@@ -616,7 +624,7 @@ export default function AdminModal({ isOpen, onClose, username, preferences }: P
                   <button
                     onClick={handleAddUser}
                     disabled={!newUserName.trim() || ((newUserVpOnly || isNewUserTeacher) && newUserPin.length !== 4)}
-                    className="px-4 py-2 text-white text-sm font-bold rounded-lg disabled:opacity-50 shadow-xs"
+                    className="w-full col-span-2 min-w-0 whitespace-nowrap px-2 sm:px-4 py-2.5 text-xs sm:text-sm font-bold rounded-lg disabled:opacity-50 shadow-xs"
                     style={{ backgroundColor: theme.accent }}
                   >
                     Benutzer hinzufügen
@@ -624,7 +632,7 @@ export default function AdminModal({ isOpen, onClose, username, preferences }: P
                 </div>
 
                 <div className={`border ${theme.border} rounded-xl overflow-hidden flex flex-col`}>
-                  <div className={`p-4 border-b ${theme.border} ${theme.bgSidebar} flex items-center justify-between gap-4`}>
+                  <div className={`p-3 sm:p-4 border-b ${theme.border} ${theme.bgSidebar} flex flex-wrap items-center justify-between gap-3`}>
                     <div className="flex items-center gap-3">
                       <input
                         type="checkbox"
@@ -635,7 +643,7 @@ export default function AdminModal({ isOpen, onClose, username, preferences }: P
                       <span className={`text-sm font-bold ${theme.textMain}`}>Alle Benutzer auswählen</span>
                     </div>
                     {selectedUsers.length > 0 && (
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className={`text-xs ${theme.textMuted} mr-2`}>{selectedUsers.length} ausgewählt:</span>
                         <button onClick={() => handleBulkUpdateStatus('ACTIVE')} className="px-2 py-1 text-xs font-bold bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 rounded cursor-pointer">Aktiv</button>
                         <button onClick={() => handleBulkUpdateStatus('READ_ONLY')} className="px-2 py-1 text-xs font-bold bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 rounded cursor-pointer">Nur Lesen</button>
@@ -649,8 +657,8 @@ export default function AdminModal({ isOpen, onClose, username, preferences }: P
                       const isUserAdmin = u.isAdmin || u.status === 'ADMIN';
                       const isVpOnly = !!u.vpOnly || u.status === 'VP_ONLY';
                       return (
-                        <div key={u.username} className={`p-4 flex items-center justify-between ${theme.bgInput} hover:bg-black/5 dark:hover:bg-white/5`}>
-                          <div className="flex items-center gap-3">
+                        <div key={u.username} className={`p-3 sm:p-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between ${theme.bgInput} hover:bg-black/5 dark:hover:bg-white/5`}>
+                          <div className="flex min-w-0 items-center gap-3">
                             <input
                               type="checkbox"
                               checked={selectedUsers.includes(u.username)}
@@ -660,66 +668,65 @@ export default function AdminModal({ isOpen, onClose, username, preferences }: P
                             />
                             <div>
                               <div className="flex items-center gap-2">
-                                <span className={`font-bold text-base ${theme.textMain}`}>{u.username}</span>
+                                <span className={`break-all font-bold text-base ${theme.textMain}`}>{u.username}</span>
                               </div>
-                              <div className={`text-xs font-semibold mt-1 ${isUserAdmin ? 'text-purple-500' : u.status === 'ACTIVE' ? 'text-emerald-500' : u.status === 'READ_ONLY' ? 'text-amber-500' : 'text-rose-500'}`}>
-                                {isUserAdmin ? 'Admin' : isVpOnly ? 'Nur Vertretungsplan' : u.status === 'ACTIVE' ? 'Aktiv' : u.status === 'READ_ONLY' ? 'Nur Lesezugriff' : 'Gesperrt'}
+                              <div className={`text-xs font-semibold mt-1 ${isUserAdmin ? 'text-purple-500' : u.status === 'BLOCKED' ? 'text-rose-500' : isVpOnly ? 'text-sky-600 dark:text-sky-400' : u.status === 'ACTIVE' ? 'text-emerald-500' : 'text-amber-500'}`}>
+                                {isUserAdmin ? 'Admin' : u.status === 'BLOCKED' ? 'Gesperrt' : isVpOnly ? 'VP-only' : u.status === 'ACTIVE' ? 'Aktiv' : u.status === 'READ_ONLY' ? 'Nur Lesezugriff' : 'Gesperrt'}
                               </div>
                             </div>
                           </div>
                           
-                          <div className="flex items-center gap-2">
+                          <div className="grid w-full shrink-0 grid-cols-2 items-center gap-2 lg:w-[292px]">
                             {!isUserAdmin ? (
                               <>
-                                {!isVpOnly && (
-                                  <select
-                                    value={u.status || 'ACTIVE'}
-                                    onChange={(e) => handleUpdateStatus(u.username, e.target.value as any)}
-                                    className={`text-xs px-2 py-1.5 rounded-lg border ${theme.border} ${theme.bgModal} ${theme.textMain} focus:outline-none`}
-                                  >
-                                    <option value="ACTIVE">Aktiv</option>
-                                    <option value="READ_ONLY">Nur Lesen</option>
-                                    <option value="BLOCKED">Sperren</option>
-                                  </select>
-                                )}
-                                <div className="flex items-center gap-1">
+                                <select
+                                  value={u.status || 'ACTIVE'}
+                                  onChange={(e) => handleUpdateStatus(u.username, e.target.value as any)}
+                                  className={`col-span-2 w-full min-w-0 text-xs px-2 py-1.5 rounded-lg border ${theme.border} ${theme.bgModal} ${theme.textMain} focus:outline-none`}
+                                >
+                                  <option value="ACTIVE">Kalender + VP</option>
+                                  <option value="READ_ONLY">Nur Lesen</option>
+                                  <option value="VP_ONLY">VP-only</option>
+                                  <option value="BLOCKED">Gesperrt</option>
+                                </select>
+                                <div className="col-span-2 flex w-full items-center gap-1">
                                   <input
                                     type="password"
                                     value={pinEdits[u.username] || ''}
                                     onChange={(e) => setPinEdits(prev => ({ ...prev, [u.username]: e.target.value.replace(/\D/g, '').slice(0, 4) }))}
-                                    placeholder="PIN"
+                                    placeholder="PIN optional"
+                                    title="Optional: PIN vorgeben. Leer lassen, damit der Benutzer beim nächsten Login selbst eine PIN festlegt."
                                     inputMode="numeric"
                                     pattern="[0-9]{4}"
                                     maxLength={4}
-                                    className={`w-16 text-xs px-2 py-1.5 rounded-lg border ${theme.border} ${theme.bgModal} ${theme.textMain} focus:outline-none text-center tracking-widest`}
+                                    className={`w-16 shrink-0 text-xs px-2 py-1.5 rounded-lg border ${theme.border} ${theme.bgModal} ${theme.textMain} focus:outline-none text-center tracking-widest`}
                                     aria-label={`Neue PIN für ${u.username}`}
                                   />
                                   <button
                                     onClick={() => handleSetUserPin(u.username)}
                                     disabled={(pinEdits[u.username] || '').length !== 4}
                                     title="Neue Start-PIN setzen"
-                                    className="px-2 py-1.5 text-xs font-semibold text-amber-700 bg-amber-50 dark:bg-amber-950/30 dark:text-amber-300 rounded-lg hover:bg-amber-100 dark:hover:bg-amber-900/50 transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                                    className="min-w-0 flex-1 justify-center px-2 py-1.5 text-xs font-semibold text-amber-700 bg-amber-50 dark:bg-amber-950/30 dark:text-amber-300 rounded-lg hover:bg-amber-100 dark:hover:bg-amber-900/50 transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                                   >
                                     <KeyRound className="w-3.5 h-3.5" />
                                     PIN ändern
                                   </button>
                                 </div>
-                                {!isVpOnly && (
-                                  <button
-                                    onClick={() => handleResetPin(u.username)}
-                                    title="PIN zurücksetzen"
-                                    className="px-2 py-1.5 text-xs font-semibold text-rose-500 bg-rose-50 dark:bg-rose-950/30 rounded-lg hover:bg-rose-100 dark:hover:bg-rose-900/50 transition-colors flex items-center gap-1.5 cursor-pointer"
-                                  >
-                                    <KeyRound className="w-3.5 h-3.5" />
-                                    PIN zurücksetzen
-                                  </button>
-                                )}
+                                <button
+                                  onClick={() => handleResetPin(u.username)}
+                                  title="PIN zurücksetzen"
+                                  className="w-full min-w-0 justify-center px-1.5 py-1.5 text-[11px] sm:text-xs font-semibold text-rose-500 bg-rose-50 dark:bg-rose-950/30 rounded-lg hover:bg-rose-100 dark:hover:bg-rose-900/50 transition-colors flex items-center gap-1 cursor-pointer"
+                                >
+                                  <KeyRound className="w-3.5 h-3.5" />
+                                  PIN zurücksetzen
+                                </button>
                                 <button
                                   onClick={() => handleDeleteUser(u.username)}
                                   title="Benutzer löschen"
-                                  className="p-1.5 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-lg transition-colors cursor-pointer"
+                                  className="w-full min-w-0 justify-center p-1.5 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-lg transition-colors cursor-pointer flex items-center gap-1 text-[11px] sm:text-xs font-semibold"
                                 >
                                   <Trash2 className="w-4 h-4" />
+                                  Benutzer löschen
                                 </button>
                               </>
                             ) : (
@@ -757,13 +764,13 @@ export default function AdminModal({ isOpen, onClose, username, preferences }: P
                   </div>
                 </div>
 
-                <div className={`flex items-center gap-3 p-4 border ${theme.border} rounded-xl ${theme.bgInput}`}>
+                <div className={`grid grid-cols-[40px_minmax(0,1fr)] gap-2 sm:flex sm:items-center sm:gap-3 p-3 sm:p-4 border ${theme.border} rounded-xl ${theme.bgInput}`}>
                   <input
                     type="text"
                     value={newCatName}
                     onChange={e => setNewCatName(e.target.value)}
                     placeholder="Neue Kategorie..."
-                    className={`flex-1 px-3 py-2 border ${theme.borderInput} ${theme.bgModal} rounded-lg text-sm ${theme.textMain} focus:outline-none`}
+                    className={`col-span-2 min-w-0 sm:flex-1 px-3 py-2 border ${theme.borderInput} ${theme.bgModal} rounded-lg text-sm ${theme.textMain} focus:outline-none`}
                   />
                   <input
                     type="color"
@@ -774,7 +781,7 @@ export default function AdminModal({ isOpen, onClose, username, preferences }: P
                   <button
                     onClick={handleAddCategory}
                     disabled={!newCatName.trim()}
-                    className="px-4 py-2 text-white text-sm font-bold rounded-lg disabled:opacity-50 shrink-0 shadow-xs"
+                    className="w-full sm:w-auto px-2 sm:px-4 py-2 text-white text-xs sm:text-sm font-bold rounded-lg disabled:opacity-50 shrink-0 shadow-xs"
                     style={{ backgroundColor: theme.accent }}
                   >
                     Hinzufügen
@@ -833,7 +840,7 @@ export default function AdminModal({ isOpen, onClose, username, preferences }: P
                 {/* Add new course toolbar */}
                 <div className={`p-4 border ${theme.border} rounded-md ${theme.bgInput} space-y-3`}>
                   <h4 className={`text-xs font-bold ${theme.textMuted} uppercase tracking-wider`}>Neuen Kurs anlegen</h4>
-                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                     <input
                       type="text"
                       value={newCourseName}
@@ -888,7 +895,7 @@ export default function AdminModal({ isOpen, onClose, username, preferences }: P
                         isTargetSection ? 'border-teal-700 bg-teal-500/5 ring-1 ring-teal-700' : `${theme.border} ${theme.bgSidebar}`
                       }`}
                     >
-                      <div className="flex items-center justify-between mb-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
                         <div className="flex items-center gap-2">
                           <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: color }} />
                           <h4 className={`text-xs font-bold ${theme.textMain} uppercase tracking-wider`}>{title}</h4>
@@ -910,7 +917,7 @@ export default function AdminModal({ isOpen, onClose, username, preferences }: P
                           Kurse hierher ziehen, um sie als {type} festzulegen
                         </div>
                       ) : (
-                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
                           {list.map((c) => {
                             const isBeingDragged = draggedCourseId === c.id;
                             const isDragOver = dragOverCourseId === c.id;
@@ -1017,6 +1024,7 @@ export default function AdminModal({ isOpen, onClose, username, preferences }: P
                 })}
               </div>
             )}
+            </div>
           </div>
         </div>
       </div>

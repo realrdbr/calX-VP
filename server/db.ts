@@ -207,6 +207,62 @@ export async function dbRecordCalendarLoginAttempt(username: string, ipAddress: 
   }
 }
 
+export async function dbGetCalendarLoginLockRemaining(username: string, ipAddress: string): Promise<number> {
+  if (!isConnected || !pool) return 0;
+  const now = Date.now();
+  const escalationWindowAgo = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const [rows]: any = await pool.query(
+    `SELECT attempted_at, successful FROM calendar_login_attempts
+     WHERE username = ? AND ip_address = ? AND attempted_at >= ?
+     ORDER BY attempted_at DESC LIMIT 512`,
+    [username.trim(), ipAddress, escalationWindowAgo]
+  );
+  const latestSuccess = Math.max(0, ...rows.filter((row: any) => !!row.successful).map((row: any) => new Date(row.attempted_at).getTime()));
+  const failures = rows
+    .filter((row: any) => !row.successful && new Date(row.attempted_at).getTime() > latestSuccess)
+    .map((row: any) => new Date(row.attempted_at).getTime());
+  const recentFailures = failures.filter((time: number) => now - time <= 15 * 60 * 1000);
+  if (recentFailures.length < 8) return 0;
+  const escalation = Math.max(1, Math.ceil(failures.length / 8));
+  const lockMs = Math.min(5 * 60 * 1000 * (2 ** (escalation - 1)), 7 * 24 * 60 * 60 * 1000);
+  const lockedUntil = Math.max(...recentFailures) + lockMs;
+  return Math.max(0, Math.ceil((lockedUntil - now) / 1000));
+}
+
+export async function dbGetCalendarIpLoginLockRemaining(ipAddress: string): Promise<number> {
+  if (!isConnected || !pool) return 0;
+  const now = Date.now();
+  const escalationWindowAgo = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString();
+  let rows: any[];
+  try {
+    const [combined]: any = await pool.query(
+      `SELECT attempted_at, successful FROM calendar_login_attempts
+       WHERE ip_address = ? AND attempted_at >= ?
+       UNION ALL
+       SELECT attempted_at, successful FROM vp_login_attempts
+       WHERE ip_address = ? AND attempted_at >= ?
+       ORDER BY attempted_at DESC LIMIT 4096`,
+      [ipAddress, escalationWindowAgo, ipAddress, escalationWindowAgo]
+    );
+    rows = combined;
+  } catch (error: any) {
+    if (error?.code !== 'ER_NO_SUCH_TABLE') throw error;
+    const [calendarRows]: any = await pool.query(
+      `SELECT attempted_at, successful FROM calendar_login_attempts
+       WHERE ip_address = ? AND attempted_at >= ? ORDER BY attempted_at DESC LIMIT 4096`,
+      [ipAddress, escalationWindowAgo]
+    );
+    rows = calendarRows;
+  }
+  const failures = rows.filter((row: any) => !row.successful)
+    .map((row: any) => new Date(row.attempted_at).getTime());
+  const recentFailures = failures.filter((time: number) => now - time <= 15 * 60 * 1000);
+  if (recentFailures.length < 8) return 0;
+  const escalation = Math.max(1, Math.ceil(failures.length / 8));
+  const lockMs = Math.min(5 * 60 * 1000 * (2 ** (escalation - 1)), 7 * 24 * 60 * 60 * 1000);
+  return Math.max(0, Math.ceil((Math.max(...recentFailures) + lockMs - now) / 1000));
+}
+
 export const DEFAULT_PREFERENCES = {
   darkMode: false,
   themeMode: 'system',
@@ -558,7 +614,7 @@ export async function dbGetUser(username: string) {
       if (!onlyTables.length || !vpTables.length) return null;
       const [vpRows]: any = await pool.query(`SELECT vp.username, vp.class_name, IF(vp.active = 1 AND only_users.active = 1, 'VP_ONLY', 'BLOCKED') AS status, only_users.pin_hash AS pin, only_users.info_acknowledged FROM vp_users vp JOIN vp_only_users only_users ON only_users.user_id = vp.id LEFT JOIN users calendar_user ON LOWER(calendar_user.username) = LOWER(vp.username) WHERE LOWER(vp.username) = LOWER(?) AND calendar_user.username IS NULL`, [uname]);
       if (!vpRows.length) return null;
-      return { username: vpRows[0].username, courses: [], pin: vpRows[0].pin || undefined, status: vpRows[0].status, className: String(vpRows[0].class_name || '11'), infoAcknowledged: !!vpRows[0].info_acknowledged, preferences: { ...DEFAULT_PREFERENCES } };
+      return { username: vpRows[0].username, courses: [], pin: vpRows[0].pin || undefined, status: vpRows[0].status, vpOnly: true, className: String(vpRows[0].class_name || '11'), infoAcknowledged: !!vpRows[0].info_acknowledged, preferences: { ...DEFAULT_PREFERENCES } };
     }
     const row = rows[0];
     const rawCourses = typeof row.courses === 'string' ? JSON.parse(row.courses || '[]') : (row.courses || []);
@@ -775,8 +831,6 @@ export async function dbAdminSetUserPin(username: string, pin: string) {
          LEFT JOIN users calendar_users ON LOWER(calendar_users.username) = LOWER(vp.username)
          WHERE LOWER(vp.username) = LOWER(?)
            AND calendar_users.username IS NULL
-           AND vp.active = 1
-           AND only_users.active = 1
          LIMIT 1`,
         [uname]
       );
@@ -800,6 +854,82 @@ export async function dbAdminSetUserPin(username: string, pin: string) {
   }
   const preferences = { ...(existing.preferences || DEFAULT_PREFERENCES), forcePinChange: true };
   return dbSaveUser(uname, { pin, preferences });
+}
+
+export async function dbPromoteVpOnlyUser(username: string) {
+  if (isConnected && pool) {
+    await pool.query('DELETE FROM vp_only_users WHERE LOWER(username) = LOWER(?)', [username.trim()]);
+    await pool.query('DELETE FROM vp_only_sessions WHERE LOWER(username) = LOWER(?)', [username.trim()]);
+  }
+}
+
+export async function dbSetVpOnlyAccountActive(username: string, active: boolean) {
+  if (!isConnected || !pool) throw new Error('VP-only-Nutzer benötigen die gemeinsame Datenbank.');
+  const value = active ? 1 : 0;
+  const [result]: any = await pool.query(
+    `UPDATE vp_only_users only_users JOIN vp_users vp ON vp.id = only_users.user_id
+     SET only_users.active = ?, vp.active = ? WHERE LOWER(vp.username) = LOWER(?)`,
+    [value, value, username.trim()]
+  );
+  if (!result.affectedRows) {
+    const [rows]: any = await pool.query('SELECT 1 FROM vp_only_users WHERE LOWER(username) = LOWER(?) LIMIT 1', [username.trim()]);
+    if (!rows.length) throw new Error('VP-only-Nutzer nicht gefunden.');
+  }
+}
+
+export async function dbRequireVpOnlyPinChange(username: string) {
+  if (!isConnected || !pool) throw new Error('VP-only-Nutzer benötigen die gemeinsame Datenbank.');
+  const [result]: any = await pool.query(
+    'UPDATE vp_only_users SET must_change_pin = 1 WHERE LOWER(username) = LOWER(?)',
+    [username.trim()]
+  );
+  if (!result.affectedRows) {
+    const [rows]: any = await pool.query('SELECT 1 FROM vp_only_users WHERE LOWER(username) = LOWER(?) LIMIT 1', [username.trim()]);
+    if (!rows.length) throw new Error('VP-only-Nutzer nicht gefunden.');
+  }
+}
+
+export async function dbResetVpOnlyPin(username: string) {
+  if (!isConnected || !pool) throw new Error('VP-only-Nutzer benötigen die gemeinsame Datenbank.');
+  const [result]: any = await pool.query(
+    `UPDATE vp_only_users only_users JOIN vp_users vp ON vp.id = only_users.user_id
+     SET only_users.pin_hash = '', only_users.must_change_pin = 1, vp.pin_hash = ''
+     WHERE LOWER(vp.username) = LOWER(?)`,
+    [username.trim()]
+  );
+  if (!result.affectedRows) {
+    const [rows]: any = await pool.query('SELECT 1 FROM vp_only_users WHERE LOWER(username) = LOWER(?) LIMIT 1', [username.trim()]);
+    if (!rows.length) throw new Error('VP-only-Nutzer nicht gefunden.');
+  }
+  await deleteUserSessions(username);
+}
+
+export async function dbResetUserPin(username: string) {
+  const uname = username.toLowerCase();
+  if (isConnected && pool) {
+    const [onlyTables]: any = await pool.query("SHOW TABLES LIKE 'vp_only_users'");
+    const [vpTables]: any = await pool.query("SHOW TABLES LIKE 'vp_users'");
+    if (onlyTables.length && vpTables.length) {
+      const [rows]: any = await pool.query(
+        `SELECT only_users.user_id FROM vp_only_users only_users
+         JOIN vp_users vp ON vp.id = only_users.user_id
+         LEFT JOIN users calendar_users ON LOWER(calendar_users.username) = LOWER(vp.username)
+         WHERE LOWER(vp.username) = LOWER(?) AND calendar_users.username IS NULL LIMIT 1`,
+        [uname]
+      );
+      if (rows.length) {
+        await dbResetVpOnlyPin(uname);
+        return;
+      }
+    }
+  }
+  const existing = await dbGetUser(uname);
+  if (!existing) throw new Error('Kalendernutzer nicht gefunden.');
+  await dbSaveUser(uname, {
+    pin: null,
+    preferences: { ...(existing.preferences || DEFAULT_PREFERENCES), forcePinChange: true }
+  });
+  await deleteUserSessions(uname);
 }
 
 export async function dbCreateVpOnlyUser(data: {

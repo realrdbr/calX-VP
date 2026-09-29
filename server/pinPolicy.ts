@@ -1,4 +1,4 @@
-export function requiresPersonalPin(user: { pin?: string; preferences?: { forcePinChange?: boolean } }): boolean {
+export function requiresPersonalPin(user: { pin?: string; preferences?: { forcePinChange?: boolean; [key: string]: unknown } }): boolean {
   return !user.pin || !!user.preferences?.forcePinChange;
 }
 

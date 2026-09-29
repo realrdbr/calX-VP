@@ -1,5 +1,14 @@
 export const API_URL = '';
 
+export class ApiError extends Error {
+  retryAfter?: number;
+  constructor(message: string, retryAfter?: number) {
+    super(message);
+    this.name = 'ApiError';
+    this.retryAfter = retryAfter;
+  }
+}
+
 function getHeaders(adminToken?: string) {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json'
@@ -22,6 +31,11 @@ async function readError(res: Response, fallback: string) {
 export async function checkUser(username?: string) {
   const url = username ? `${API_URL}/api/check?username=${encodeURIComponent(username)}` : `${API_URL}/api/check`;
   const res = await fetch(url, { headers: getHeaders() });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}));
+    const retryAfter = Number(error.retryAfter || res.headers.get('Retry-After')) || undefined;
+    throw new ApiError(error.error || 'Benutzerprüfung fehlgeschlagen', retryAfter);
+  }
   return res.json();
 }
 
@@ -71,8 +85,9 @@ export async function loginUser(username: string, pin?: string) {
     body: JSON.stringify({ username, pin }),
   });
   if (!res.ok) {
-    const error = await res.json();
-    throw new Error(error.error || 'Login failed');
+    const error = await res.json().catch(() => ({}));
+    const retryAfter = Number(error.retryAfter || res.headers.get('Retry-After')) || undefined;
+    throw new ApiError(error.error || 'Login failed', retryAfter);
   }
   const data = await res.json();
   return data;
@@ -283,12 +298,12 @@ export async function adminFetchUsers(adminToken?: string) {
   return res.json();
 }
 
-export async function adminUpdateUserStatus(username: string, status: 'ACTIVE' | 'READ_ONLY' | 'BLOCKED', adminToken?: string) {
+export async function adminUpdateUserStatus(username: string, status: 'ACTIVE' | 'READ_ONLY' | 'BLOCKED' | 'VP_ONLY', adminToken?: string, pin?: string) {
   const res = await fetch(`${API_URL}/api/admin/users/${username}/status`, {
     method: 'PUT',
     headers: getHeaders(adminToken),
     credentials: 'same-origin',
-    body: JSON.stringify({ status })
+    body: JSON.stringify({ status, pin })
   });
   if (!res.ok) throw new Error(await readError(res, 'Benutzerstatus konnte nicht geändert werden.'));
   return res.json();

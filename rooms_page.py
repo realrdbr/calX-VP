@@ -408,7 +408,8 @@ class RoomsPageHandler(BaseHTTPRequestHandler):
         parsed_url = urlparse(self.path)
         query = parse_qs(parsed_url.query)
 
-        selected_date = parse_date(query_value(query, "datum"))
+        date_value = query_value(query, "datum")
+        selected_date = parse_date(date_value) if date_value else parse_date(None)
 
         if parsed_url.path == "/api/room-version":
             try:

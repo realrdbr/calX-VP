@@ -57,9 +57,9 @@ def room_table_plans(week):
 
 
 def room_view_switch(selected_date, selected_room=None, *, free=False):
-    fields = {'woche': format_week_value(selected_date)} if free else {
-        'frei': '1', 'datum': selected_date.isoformat(), 'stunde': '1',
-    }
+    # The free-room day view has its own default (today, or next Monday on a
+    # weekend); do not carry the weekly timetable's Monday into that view.
+    fields = {'woche': format_week_value(selected_date)} if free else {'frei': '1'}
     if free and selected_room:
         fields['raum'] = selected_room
     target = '/raeume?' + urlencode(fields)

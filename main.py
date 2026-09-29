@@ -20,7 +20,7 @@ from urllib.parse import quote
 from dotenv import load_dotenv
 
 from account_page import render_login, render_subscriptions
-from accounts import AccountStore, NotifySettings, Session
+from accounts import AccountStore, IpLoginLockedError, LoginLockedError, NotifySettings, Session
 from ntfy.diagnostics import configure_logging, emit, endpoint, error_fields
 from ntfy.service import NtfyService, resolve_ntfy_internal_url
 from plan_page import get_available_classes, get_selected_class_cookie_name, get_selected_subject_cookie_name, get_week_plans_for_page, get_week_version, render_plan_page, resolve_initial_class
@@ -351,7 +351,12 @@ class AppRequestHandler(BaseHTTPRequestHandler):
             if parsed.path == "/raeume" and (query_value(query, "frei") == "1" or query_value(query, "datum") is not None):
                 from urllib.parse import urlencode
                 from web_utils import parse_date
-                day = parse_date(query_value(query, "datum")) if query_value(query, "datum") else parse_week(query_value(query, "woche"))
+                if query_value(query, "datum"):
+                    day = parse_date(query_value(query, "datum"))
+                elif query_value(query, "frei") == "1":
+                    day = parse_date(None)
+                else:
+                    day = parse_week(query_value(query, "woche"))
                 canonical = urlencode({"frei": "1", "datum": day.isoformat(), "stunde": parse_hour(query_value(query, "stunde"))})
                 if parsed.query != canonical:
                     redirect(self, "/raeume?" + canonical)
@@ -415,9 +420,18 @@ class AppRequestHandler(BaseHTTPRequestHandler):
                 send_html(self, render_login())
                 return
             if stage == "username":
+                login_ip = self._client_ip()
+                try:
+                    ip_remaining = self.store.ip_lock_remaining_seconds(login_ip)
+                    if ip_remaining:
+                        raise IpLoginLockedError(ip_remaining)
+                except LoginLockedError as error:
+                    send_html(self, render_login(str(error), username=username, locked_seconds=error.remaining_seconds))
+                    return
                 try:
                     resolved_username, requires_pin = self.store.get_login_identity(username)
                 except ValueError:
+                    self.store.record_failed_login_attempt(username, login_ip)
                     send_html(self, render_login("Dieser Benutzername existiert nicht.", username=username))
                     return
                 if not requires_pin:
@@ -431,23 +445,35 @@ class AppRequestHandler(BaseHTTPRequestHandler):
                 send_html(self, render_login(username=resolved_username, pin_step=True))
                 return
             pin = self._field(data, "pin")
+            login_ip = self._client_ip()
+            try:
+                ip_remaining = self.store.ip_lock_remaining_seconds(login_ip)
+                if ip_remaining:
+                    raise IpLoginLockedError(ip_remaining)
+            except LoginLockedError as error:
+                send_html(self, render_login(str(error), username=username, pin_step=True, locked_seconds=error.remaining_seconds))
+                return
             if len(pin) != 4 or not pin.isascii() or not pin.isdigit():
+                self.store.record_failed_login_attempt(username, login_ip)
                 send_html(self, render_login("Die PIN muss aus genau vier Ziffern bestehen.", username=username, pin_step=True))
                 return
             client_ip_started = time.monotonic()
-            login_ip = self._client_ip()
             client_ip_duration_ms = round((time.monotonic() - client_ip_started) * 1000)
             if client_ip_duration_ms >= 250:
                 emit("vp.request_stage_slow", level=30, route="/login",
                      stage="client_ip", duration_ms=client_ip_duration_ms)
             auth_started = time.monotonic()
-            user = self.store.authenticate(username, pin, login_ip)
+            try:
+                user = self.store.authenticate(username, pin, login_ip)
+            except LoginLockedError as error:
+                send_html(self, render_login(str(error), username=username, pin_step=True, locked_seconds=error.remaining_seconds))
+                return
             auth_duration_ms = round((time.monotonic() - auth_started) * 1000)
             if auth_duration_ms >= 250:
                 emit("vp.request_stage_slow", level=30, route="/login",
                      stage="authenticate", duration_ms=auth_duration_ms)
             if user is None:
-                send_html(self, render_login("PIN falsch oder Anmeldung vorübergehend gesperrt.", username=username, pin_step=True))
+                send_html(self, render_login("PIN falsch.", username=username, pin_step=True))
                 return
             session_started = time.monotonic()
             token, _csrf = self.store.create_session(user.id)

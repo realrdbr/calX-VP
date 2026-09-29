@@ -22,6 +22,10 @@ import {
   dbSaveUser,
   dbSetRequiredPin,
   dbAdminSetUserPin,
+  dbPromoteVpOnlyUser,
+  dbSetVpOnlyAccountActive,
+  dbResetVpOnlyPin,
+  dbResetUserPin,
   dbCreateVpOnlyUser,
   dbDeleteUser,
   dbGetEvents,
@@ -37,6 +41,8 @@ import {
   dbUpdateEvent,
   dbDeleteEvent,
   dbRecordCalendarLoginAttempt,
+  dbGetCalendarLoginLockRemaining,
+  dbGetCalendarIpLoginLockRemaining,
   dbCleanupExpiredLoginAttempts,
   dbGetEventById,
   dbCreateFeedback,
@@ -218,13 +224,20 @@ async function startServer() {
   app.get('/api/check', async (req, res) => {
     const username = (req.query.username as string || '').toLowerCase();
     if (!username) return res.json({ exists: false });
-    
+    const ipAddress = req.ip || req.socket.remoteAddress || 'unknown';
+    const ipLockRemaining = await dbGetCalendarIpLoginLockRemaining(ipAddress);
+    if (ipLockRemaining > 0) {
+      res.setHeader('Retry-After', String(ipLockRemaining));
+      return res.status(429).json({ error: 'Zu viele Fehlversuche', retryAfter: ipLockRemaining });
+    }
     const user = await dbGetUser(username);
     if (!user) {
+      await dbRecordCalendarLoginAttempt(username, ipAddress, false);
       return res.json({ exists: false, available: true, requiresPin: false });
     }
-    if (user.status === 'BLOCKED') {
-      return res.json({ exists: true, available: false, requiresPin: false, blocked: true, status: 'BLOCKED', error: 'Dieses Konto wurde gesperrt.' });
+    if (user.status === 'BLOCKED' || user.status === 'VP_ONLY') {
+      const blocked = user.status === 'BLOCKED';
+      return res.json({ exists: true, available: false, requiresPin: false, blocked, status: user.status, error: blocked ? 'Dieses Konto wurde gesperrt.' : 'Dieses Konto ist nur für den Vertretungsplan freigeschaltet.' });
     }
     return res.json({ exists: true, available: false, requiresPin: !!user.pin, status: user.status || 'ACTIVE' });
   });
@@ -234,18 +247,19 @@ async function startServer() {
   });
 
   // Rate limiting for login attempts
-  const failedLoginAttempts = new Map<string, { count: number; lockUntil: number; lastFailedAt: number }>();
+  const failedLoginAttempts = new Map<string, { count: number; lockUntil: number; lastFailedAt: number; lockLevel: number }>();
   const LOGIN_WINDOW_MS = 15 * 60 * 1000;
-  const LOGIN_LOCK_MS = 5 * 60 * 1000;
+  const LOGIN_ESCALATION_MS = 30 * 24 * 60 * 60 * 1000;
+  const LOGIN_LOCK_MAX_MS = 7 * 24 * 60 * 60 * 1000;
+  const LOGIN_LOCK_BASE_MS = 5 * 60 * 1000;
 
   function loginKey(username: string, ip: string): string {
     return `${username}::${ip}`;
   }
 
   function cleanupAttempts() {
-    const cutoff = Date.now() - LOGIN_WINDOW_MS;
     for (const [key, value] of failedLoginAttempts.entries()) {
-      if (value.lastFailedAt < cutoff && value.lockUntil < Date.now()) {
+      if (value.lastFailedAt < Date.now() - LOGIN_ESCALATION_MS && value.lockUntil < Date.now()) {
         failedLoginAttempts.delete(key);
       }
     }
@@ -259,23 +273,26 @@ async function startServer() {
       const remainingSeconds = Math.ceil((attempt.lockUntil - Date.now()) / 1000);
       return { allowed: false, remainingSeconds };
     }
-    if (attempt.lockUntil > 0 && Date.now() >= attempt.lockUntil) {
-      failedLoginAttempts.delete(key);
-    }
     return { allowed: true };
   }
 
   function recordFailedAttempt(key: string) {
     const now = Date.now();
-    const current = failedLoginAttempts.get(key) || { count: 0, lockUntil: 0, lastFailedAt: now };
-    if (now - current.lastFailedAt > LOGIN_WINDOW_MS) {
+    const current = failedLoginAttempts.get(key) || { count: 0, lockUntil: 0, lastFailedAt: now, lockLevel: 0 };
+    if (now - current.lastFailedAt > LOGIN_ESCALATION_MS) {
       current.count = 0;
       current.lockUntil = 0;
+      current.lockLevel = 0;
+    } else if (now - current.lastFailedAt > LOGIN_WINDOW_MS) {
+      current.count = 0;
     }
     current.count += 1;
     current.lastFailedAt = now;
     if (current.count >= 8) {
-      current.lockUntil = now + LOGIN_LOCK_MS; // 5 Minutensperre
+      current.lockLevel += 1;
+      const lockDuration = Math.min(LOGIN_LOCK_BASE_MS * (2 ** (current.lockLevel - 1)), LOGIN_LOCK_MAX_MS);
+      current.lockUntil = now + lockDuration;
+      current.count = 0;
     }
     failedLoginAttempts.set(key, current);
   }
@@ -292,21 +309,31 @@ async function startServer() {
     const recordLoginAttempt = (successful: boolean) => dbRecordCalendarLoginAttempt(uname, ipAddress, successful);
 
     const rateCheck = checkRateLimit(rateLimitKey);
-    if (!rateCheck.allowed) {
-      await recordLoginAttempt(false);
-      return res.status(429).json({ error: `Zu viele fehlerhafte Anmeldeversuche. Bitte warte ${rateCheck.remainingSeconds} Sekunden.` });
+    const [persistentRemaining, ipPersistentRemaining] = await Promise.all([
+      dbGetCalendarLoginLockRemaining(uname, ipAddress),
+      dbGetCalendarIpLoginLockRemaining(ipAddress)
+    ]);
+    const remainingSeconds = Math.max(rateCheck.remainingSeconds || 0, persistentRemaining, ipPersistentRemaining);
+    if (!rateCheck.allowed || remainingSeconds > 0) {
+      res.setHeader('Retry-After', String(remainingSeconds || 1));
+      return res.status(429).json({ error: 'Zu viele Fehlversuche', retryAfter: remainingSeconds });
     }
 
     const user = await dbGetUser(uname);
     if (!user) {
       recordFailedAttempt(rateLimitKey);
       await recordLoginAttempt(false);
+      const updatedLimit = checkRateLimit(rateLimitKey);
+      if (!updatedLimit.allowed) {
+        res.setHeader('Retry-After', String(updatedLimit.remainingSeconds || 1));
+        return res.status(429).json({ error: 'Zu viele Fehlversuche', retryAfter: updatedLimit.remainingSeconds });
+      }
       return res.status(404).json({ error: 'Benutzer nicht gefunden' });
     }
 
-    if (user.status === 'BLOCKED') {
+    if (user.status === 'BLOCKED' || user.status === 'VP_ONLY') {
       await recordLoginAttempt(false);
-      return res.status(403).json({ error: 'Dein Konto wurde aufgrund unangemessener Aktivitäten gesperrt.' });
+      return res.status(403).json({ error: user.status === 'BLOCKED' ? 'Dein Konto wurde gesperrt.' : 'Dieses Konto ist nur für den Vertretungsplan freigeschaltet.' });
     }
 
     if (user.pin) {
@@ -319,6 +346,11 @@ async function startServer() {
         if (!verifyPin(pin, user.pin)) {
           recordFailedAttempt(rateLimitKey);
           await recordLoginAttempt(false);
+          const updatedLimit = checkRateLimit(rateLimitKey);
+          if (!updatedLimit.allowed) {
+            res.setHeader('Retry-After', String(updatedLimit.remainingSeconds || 1));
+            return res.status(429).json({ error: 'Zu viele Fehlversuche', retryAfter: updatedLimit.remainingSeconds });
+          }
           return res.status(401).json({ error: 'Falscher PIN' });
         }
         if (typeof user.pin === 'string' && !user.pin.startsWith('scrypt$')) {
@@ -361,8 +393,8 @@ async function startServer() {
     }
 
     const user = await dbGetUser(username);
-    if (user && user.status === 'BLOCKED') {
-      return res.status(403).json({ error: 'Dein Konto wurde aufgrund unangemessener Aktivitäten gesperrt.' });
+    if (user && (user.status === 'BLOCKED' || user.status === 'VP_ONLY')) {
+      return res.status(403).json({ error: user.status === 'BLOCKED' ? 'Dein Konto wurde gesperrt.' : 'Dieses Konto ist nur für den Vertretungsplan freigeschaltet.' });
     }
 
     if (!user) return res.status(401).json({ error: 'Konto nicht gefunden.' });
@@ -929,7 +961,7 @@ async function startServer() {
 
   app.put('/api/admin/users/:username/status', requireElevatedAdmin, async (req, res) => {
     const target = (req.params.username as string || '').toLowerCase();
-    const { status } = req.body;
+    const { status, pin } = req.body;
     const existing = await dbGetUser(target);
     if (!existing) {
       return res.status(404).json({ error: 'Kalendernutzer nicht gefunden.' });
@@ -937,10 +969,31 @@ async function startServer() {
     if (await dbIsAdmin(target)) {
       return res.status(400).json({ error: 'Admins können nur direkt in der Datenbank geändert werden.' });
     }
-    if (status === 'ADMIN') {
-      return res.status(400).json({ error: 'Admin-Rechte können nur direkt in der Datenbank vergeben werden.' });
+    if (!['ACTIVE', 'READ_ONLY', 'BLOCKED', 'VP_ONLY'].includes(status)) {
+      return res.status(400).json({ error: 'Ungültiger Kontostatus. Admin-Rechte können nur direkt in der Datenbank vergeben werden.' });
     }
-    await dbSaveUser(target, { status });
+    if (pin !== undefined && pin !== '' && (typeof pin !== 'string' || !/^\d{4}$/.test(pin))) {
+      return res.status(400).json({ error: 'Eine Start-PIN muss leer sein oder exakt vier Ziffern enthalten.' });
+    }
+    const statusChanged = status !== existing.status;
+    const switchingBetweenCalendarModes = !existing.vpOnly
+      && ['ACTIVE', 'READ_ONLY', 'BLOCKED'].includes(existing.status)
+      && ['ACTIVE', 'READ_ONLY', 'BLOCKED'].includes(status);
+    const requirePinSetup = statusChanged && !switchingBetweenCalendarModes;
+    if (existing.vpOnly && (status === 'VP_ONLY' || status === 'BLOCKED')) {
+      await dbSetVpOnlyAccountActive(target, status === 'VP_ONLY');
+      if (statusChanged) await dbResetVpOnlyPin(target);
+      await deleteUserSessions(target);
+      return res.json({ success: true, status });
+    }
+    const preferences = { ...(existing.preferences || {}), ...(requirePinSetup ? { forcePinChange: true } : {}) };
+    await dbSaveUser(target, {
+      status,
+      ...(statusChanged && pin ? { pin } : (requirePinSetup ? { pin: null } : {})),
+      preferences
+    });
+    if (existing.vpOnly && status !== 'VP_ONLY' && status !== 'BLOCKED') await dbPromoteVpOnlyUser(target);
+    await deleteUserSessions(target);
     res.json({ success: true, status });
   });
 
@@ -949,8 +1002,7 @@ async function startServer() {
     const existing = await dbGetUser(target);
     if (!existing) return res.status(404).json({ error: 'Kalendernutzer nicht gefunden.' });
     if (await dbIsAdmin(target)) return res.status(400).json({ error: 'Admin PIN kann nicht zurückgesetzt werden.' });
-    await dbSaveUser(target, { pin: null });
-    await deleteUserSessions(target);
+    await dbResetUserPin(target);
     res.json({ success: true });
   });
 

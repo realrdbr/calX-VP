@@ -4,6 +4,7 @@ import { checkUser, registerUser, loginUser, fetchCurrentSession } from '../lib/
 import { saveStoredSession } from '../lib/auth';
 import { Lock, User, ArrowRight, ChevronLeft, AlertCircle } from 'lucide-react';
 import AuthFooter from '../components/AuthFooter';
+import LoginLockNotice from '../components/LoginLockNotice';
 import { VERTRETUNGSPLAN_URL } from '../lib/externalLinks';
 
 export default function Home() {
@@ -12,7 +13,14 @@ export default function Home() {
   const [error, setError] = useState('');
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [loading, setLoading] = useState(false);
+  const [lockSeconds, setLockSeconds] = useState(0);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (lockSeconds <= 0) return;
+    const timer = window.setInterval(() => setLockSeconds(value => Math.max(0, value - 1)), 1000);
+    return () => window.clearInterval(timer);
+  }, [lockSeconds > 0]);
 
   useEffect(() => {
     let disposed = false;
@@ -56,6 +64,10 @@ export default function Home() {
     try {
       const check = await checkUser(name.trim());
       if (check.exists) {
+        if (check.status === 'VP_ONLY') {
+          setError('Dieses Konto ist nur für den Vertretungsplan freigeschaltet.');
+          return;
+        }
         if (check.blocked || check.status === 'BLOCKED') {
           setError('Dieses Konto wurde gesperrt.');
           return;
@@ -71,7 +83,12 @@ export default function Home() {
         setError('Benutzer nicht gefunden. Kontaktiere einen Admin.');
       }
     } catch (err: any) {
-      setError(err.message || 'Fehler bei der Verbindung zum Server');
+      if (err.retryAfter) {
+        setLockSeconds(err.retryAfter);
+        setError('');
+      } else {
+        setError(err.message || 'Fehler bei der Verbindung zum Server');
+      }
     } finally {
       setLoading(false);
     }
@@ -101,7 +118,12 @@ export default function Home() {
       saveStoredSession(res.user.username, res.sessionToken);
       navigate(`/${res.user.username}`);
     } catch (err: any) {
-      setError(err.message || 'Falscher PIN-Code');
+      if (err.retryAfter) {
+        setLockSeconds(err.retryAfter);
+        setError('');
+      } else {
+        setError(err.message || 'Falscher PIN-Code');
+      }
     } finally {
       setLoading(false);
     }
@@ -124,10 +146,10 @@ export default function Home() {
 
         {/* ONE-LINE FORMULAR */}
         <div className="w-full">
-          {error && (
+          {(error || lockSeconds > 0) && (
             <div className="mb-4 p-3.5 bg-[#fff1f2] dark:bg-[#3f1d24] border border-[#fecdd3] dark:border-[#7f1d3a] text-[#be123c] dark:text-[#fecdd3] text-xs sm:text-sm rounded-xl flex items-center gap-2.5">
               <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>{error}</span>
+              <span>{error || 'Zu viele Fehlversuche'}</span>
             </div>
           )}
 
@@ -148,17 +170,19 @@ export default function Home() {
                   autoComplete="username"
                   required
                   autoFocus
+                  disabled={lockSeconds > 0}
                   className="flex-1 border-none bg-transparent text-sm sm:text-[15px] font-medium outline-none min-w-0 placeholder:text-[#94a3b8]"
                 />
                 <button
                   type="submit"
-                  disabled={loading || !name.trim()}
+                  disabled={loading || lockSeconds > 0 || !name.trim()}
                   className="bg-[#e91e63] hover:bg-[#d81b60] text-white border-none rounded-lg py-2.5 px-4 text-sm font-bold cursor-pointer flex items-center gap-1.5 shrink-0 shadow-none transition-colors disabled:opacity-60"
                 >
                   <span>{loading ? '...' : 'Weiter'}</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
               </div>
+              <LoginLockNotice seconds={lockSeconds} />
             </form>
           ) : step === 2 ? (
             <form onSubmit={handleLoginWithPin} className="w-full space-y-3">
@@ -176,17 +200,19 @@ export default function Home() {
                   aria-label="Dein 4-stelliger PIN"
                   required
                   autoFocus
+                  disabled={lockSeconds > 0}
                   className="flex-1 border-none bg-transparent text-sm sm:text-[15px] font-medium outline-none min-w-0 placeholder:text-[#94a3b8] tracking-widest"
                 />
                 <button
                   type="submit"
-                  disabled={loading || pin.length < 4}
+                  disabled={loading || lockSeconds > 0 || pin.length < 4}
                   className="bg-[#e91e63] hover:bg-[#d81b60] text-white border-none rounded-lg py-2.5 px-4 text-sm font-bold cursor-pointer flex items-center gap-1.5 shrink-0 shadow-none transition-colors disabled:opacity-60"
                 >
                   <span>{loading ? '...' : 'Entsperren'}</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
               </div>
+              <LoginLockNotice seconds={lockSeconds} />
               <div className="text-center">
                 <button
                   type="button"

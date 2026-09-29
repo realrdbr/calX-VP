@@ -31,13 +31,25 @@ except Exception:  # pragma: no cover
 
 
 LOGIN_WINDOW = timedelta(minutes=15)
-LOGIN_LOCK = timedelta(minutes=30)
+LOGIN_LOCK_BASE = timedelta(minutes=5)
+LOGIN_LOCK_MAX = timedelta(days=7)
+LOGIN_ESCALATION_WINDOW = timedelta(days=30)
 LOGIN_MAX_FAILURES = 5
 SESSION_LIFETIME = timedelta(days=14)
 DEFAULT_LESSON_NOTIFICATION_TIMES = ("07:00", "09:10", "11:00", "13:15")
 DEFAULT_CALENDAR_NOTIFICATION_TIME = "16:00"
 DEFAULT_CALENDAR_NOTIFICATION_DAYS_BEFORE = 1
 MAX_CALENDAR_NOTIFICATION_DAYS_BEFORE = 30
+
+
+class LoginLockedError(Exception):
+    def __init__(self, remaining_seconds: int):
+        self.remaining_seconds = max(1, int(remaining_seconds))
+        super().__init__("Zu viele Fehlversuche")
+
+
+class IpLoginLockedError(LoginLockedError):
+    """IP-weite Sperre, die unabhängig vom eingegebenen Benutzernamen greift."""
 
 
 def utcnow() -> datetime:
@@ -1603,10 +1615,20 @@ class AccountStore:
             self._run(connection, f"DELETE FROM {app_table} WHERE expires_at <= ?", (now,))
             self._run(connection, "DELETE FROM vp_only_sessions WHERE expires_at <= ?", (now,))
 
-    def _is_locked(self, connection: Any, username: str, ip_address: str) -> bool:
-        threshold = to_db_time(utcnow() - LOGIN_WINDOW)
+    def _lock_remaining_seconds(self, connection: Any, username: str, ip_address: str) -> int:
+        now = utcnow()
         table = "login_attempts" if self._backend == "sqlite" else "vp_login_attempts"
         username_match = "username = ? COLLATE NOCASE" if self._backend == "sqlite" else "username = ?"
+        last_success = self._fetchone(
+            connection,
+            f"SELECT MAX(attempted_at) AS last_success FROM {table} WHERE {username_match} AND ip_address = ? AND successful = 1",
+            (username, ip_address),
+        )
+        successful_at = from_db_time(last_success["last_success"]) if last_success and last_success["last_success"] else None
+        threshold_time = max(now - LOGIN_WINDOW, successful_at) if successful_at else now - LOGIN_WINDOW
+        escalation_time = max(now - LOGIN_ESCALATION_WINDOW, successful_at) if successful_at else now - LOGIN_ESCALATION_WINDOW
+        threshold = to_db_time(threshold_time)
+        escalation_threshold = to_db_time(escalation_time)
         failures = self._fetchall(
             connection,
             f"""SELECT attempted_at FROM {table}
@@ -1615,16 +1637,80 @@ class AccountStore:
             (username, ip_address, threshold, LOGIN_MAX_FAILURES),
         )
         if len(failures) < LOGIN_MAX_FAILURES:
-            return False
-        return from_db_time(failures[0]["attempted_at"]) + LOGIN_LOCK > utcnow()
+            return 0
+        recent_count = self._fetchone(
+            connection,
+            f"SELECT COUNT(*) AS n FROM {table} WHERE {username_match} AND ip_address = ? AND successful = 0 AND attempted_at >= ?",
+            (username, ip_address, escalation_threshold),
+        )
+        escalation = max(1, (int(recent_count["n"]) + LOGIN_MAX_FAILURES - 1) // LOGIN_MAX_FAILURES)
+        lock_seconds = min(int(LOGIN_LOCK_BASE.total_seconds()) * (2 ** (escalation - 1)), int(LOGIN_LOCK_MAX.total_seconds()))
+        lock_until = from_db_time(failures[0]["attempted_at"]) + timedelta(seconds=lock_seconds)
+        return max(0, int((lock_until - now).total_seconds() + 0.999))
+
+    def _ip_lock_remaining_seconds(self, connection: Any, ip_address: str) -> int:
+        now = utcnow()
+        table = "login_attempts" if self._backend == "sqlite" else "vp_login_attempts"
+        escalation_threshold = to_db_time(now - LOGIN_ESCALATION_WINDOW)
+        if self._backend == "mysql":
+            try:
+                rows = self._fetchall(
+                    connection,
+                    """SELECT attempted_at FROM vp_login_attempts WHERE ip_address = ? AND successful = 0 AND attempted_at >= ?
+                       UNION ALL
+                       SELECT attempted_at FROM calendar_login_attempts WHERE ip_address = ? AND successful = 0 AND attempted_at >= ?
+                       ORDER BY attempted_at DESC LIMIT 4096""",
+                    (ip_address, escalation_threshold, ip_address, escalation_threshold),
+                )
+            except Exception:
+                rows = self._fetchall(
+                    connection,
+                    f"SELECT attempted_at FROM {table} WHERE ip_address = ? AND successful = 0 AND attempted_at >= ? ORDER BY attempted_at DESC LIMIT 4096",
+                    (ip_address, escalation_threshold),
+                )
+        else:
+            rows = self._fetchall(
+                connection,
+                f"SELECT attempted_at FROM {table} WHERE ip_address = ? AND successful = 0 AND attempted_at >= ? ORDER BY attempted_at DESC LIMIT 4096",
+                (ip_address, escalation_threshold),
+            )
+        failures = [from_db_time(row["attempted_at"]) for row in rows]
+        recent_failures = [attempt for attempt in failures if now - attempt <= LOGIN_WINDOW]
+        if len(recent_failures) < LOGIN_MAX_FAILURES:
+            return 0
+        escalation = max(1, (len(failures) + LOGIN_MAX_FAILURES - 1) // LOGIN_MAX_FAILURES)
+        lock_seconds = min(
+            int(LOGIN_LOCK_BASE.total_seconds()) * (2 ** (escalation - 1)),
+            int(LOGIN_LOCK_MAX.total_seconds()),
+        )
+        locked_until = max(recent_failures) + timedelta(seconds=lock_seconds)
+        return max(0, int((locked_until - now).total_seconds() + 0.999))
+
+    def ip_lock_remaining_seconds(self, ip_address: str) -> int:
+        with self._connection(operation="ip_login_lock_check") as connection:
+            return self._ip_lock_remaining_seconds(connection, ip_address)
+
+    def record_failed_login_attempt(self, username: str, ip_address: str) -> None:
+        table = "login_attempts" if self._backend == "sqlite" else "vp_login_attempts"
+        with self._connection(operation="record_login_failure") as connection:
+            self._run(
+                connection,
+                f"INSERT INTO {table}(username, ip_address, attempted_at, successful) VALUES (?, ?, ?, 0)",
+                (username.strip()[:64], ip_address, to_db_time(utcnow())),
+            )
 
     def authenticate(self, username: str, pin: str, ip_address: str) -> User | None:
         username = username.strip()
         now = to_db_time(utcnow())
+        lock_after_failure = 0
         with self._connection(operation="authenticate") as connection:
             lock_started = time.perf_counter()
-            if self._is_locked(connection, username, ip_address):
-                return None
+            ip_remaining = self._ip_lock_remaining_seconds(connection, ip_address)
+            if ip_remaining:
+                raise IpLoginLockedError(ip_remaining)
+            remaining = self._lock_remaining_seconds(connection, username, ip_address)
+            if remaining:
+                raise LoginLockedError(remaining)
             _log_slow_auth_stage("lockout_lookup", lock_started)
 
             valid = False
@@ -1647,7 +1733,13 @@ class AccountStore:
                 if user_row is not None and bool(user_row["active"]):
                     verification_started = time.perf_counter()
                     stored_pin = user_row["vp_only_pin_hash"] if bool(user_row["vp_only"]) else user_row["pin_hash"]
-                    valid, needs_rehash = _verify_account_pin(self._hasher, stored_pin, pin)
+                    if bool(user_row["vp_only"]) and not stored_pin and bool(user_row["must_change_pin"]):
+                        # A passwordless VP-only login is permitted only after
+                        # an administrator explicitly reset the PIN. The
+                        # session is forced directly into PIN setup.
+                        valid, needs_rehash = not pin, False
+                    else:
+                        valid, needs_rehash = _verify_account_pin(self._hasher, stored_pin, pin)
                     _log_slow_auth_stage("pin_verification", verification_started)
                     valid = (not bool(user_row["vp_only"]) or bool(user_row["vp_only_active"])) and valid
                     if valid and needs_rehash:
@@ -1683,8 +1775,14 @@ class AccountStore:
                     if user_row.get("calendar_username") is not None:
                         calendar_pin = user_row.get("calendar_pin")
                         valid = not calendar_pin or _verify_shared_pin(pin, calendar_pin)
-                    elif user_row.get("vp_only_pin_hash") and bool(user_row.get("vp_only_active")):
-                        valid, needs_rehash = _verify_account_pin(self._hasher, user_row.get("vp_only_pin_hash", ""), pin)
+                    elif bool(user_row.get("vp_only_active")) and (
+                        user_row.get("vp_only_pin_hash")
+                        or (not pin and bool(user_row.get("must_change_pin")))
+                    ):
+                        if not user_row.get("vp_only_pin_hash") and bool(user_row.get("must_change_pin")):
+                            valid, needs_rehash = True, False
+                        else:
+                            valid, needs_rehash = _verify_account_pin(self._hasher, user_row.get("vp_only_pin_hash", ""), pin)
                         if valid and needs_rehash:
                             self._run(connection, "UPDATE vp_only_users SET pin_hash = ? WHERE user_id = ?", (self._hasher.hash(pin), user_row["id"]))
                     if valid and user_row.get("calendar_username") is None and user_row.get("pin_hash"):
@@ -1702,6 +1800,8 @@ class AccountStore:
                 )
                 _log_slow_auth_stage("login_attempt_write", attempt_write_started)
 
+            if not valid:
+                lock_after_failure = self._lock_remaining_seconds(connection, username, ip_address)
             if valid and user_row is not None:
                 # Expired attempts are pruned by the background worker. A
                 # per-login DELETE scans the unindexed timestamp column and
@@ -1710,6 +1810,8 @@ class AccountStore:
                 user = self._user_from_row(user_row)
                 _log_slow_auth_stage("user_decode", user_decode_started)
                 return user
+        if lock_after_failure:
+            raise LoginLockedError(lock_after_failure)
         return None
 
     @staticmethod

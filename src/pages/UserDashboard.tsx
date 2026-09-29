@@ -5,6 +5,7 @@ import { checkUser, loginUser, loginWithSessionToken, fetchCurrentSession, hasAc
 import { getStoredSession, saveStoredSession, clearStoredSession } from '../lib/auth';
 import CalendarView from '../components/CalendarView';
 import AuthFooter from '../components/AuthFooter';
+import LoginLockNotice from '../components/LoginLockNotice';
 import { User } from '../types';
 import { Lock, ArrowLeft, ArrowRight, AlertCircle } from 'lucide-react';
 
@@ -21,6 +22,13 @@ export default function UserDashboard() {
   const [pinInput, setPinInput] = useState('');
   const [pinError, setPinError] = useState('');
   const [submittingPin, setSubmittingPin] = useState(false);
+  const [pinLockSeconds, setPinLockSeconds] = useState(0);
+
+  useEffect(() => {
+    if (pinLockSeconds <= 0) return;
+    const timer = window.setInterval(() => setPinLockSeconds(value => Math.max(0, value - 1)), 1000);
+    return () => window.clearInterval(timer);
+  }, [pinLockSeconds > 0]);
 
   useEffect(() => {
     if (!username) {
@@ -216,7 +224,10 @@ export default function UserDashboard() {
       setUser(res.user);
       setNeedsPin(false);
     } catch (err: any) {
-      if (err.message?.includes('gesperrt')) {
+      if (err.retryAfter) {
+        setPinLockSeconds(err.retryAfter);
+        setPinError('');
+      } else if (err.message?.includes('gesperrt')) {
         clearStoredSession(username);
         setIsBlocked(true);
       } else {
@@ -306,10 +317,10 @@ export default function UserDashboard() {
 
           {/* ONE-LINE FORMULAR */}
           <div className="w-full">
-            {pinError && (
+            {(pinError || pinLockSeconds > 0) && (
               <div className="mb-4 p-3.5 bg-[#fff1f2] border border-[#fecdd3] text-[#be123c] text-xs sm:text-sm rounded-xl flex items-center gap-2.5">
                 <AlertCircle className="w-4 h-4 shrink-0" />
-                <span>{pinError}</span>
+                <span>{pinError || 'Zu viele Fehlversuche'}</span>
               </div>
             )}
 
@@ -328,17 +339,19 @@ export default function UserDashboard() {
                   aria-label="4-stelliger PIN"
                   required
                   autoFocus
+                  disabled={pinLockSeconds > 0}
                   className="flex-1 border-none bg-transparent text-sm sm:text-[15px] font-medium text-[#0f172a] outline-none min-w-0 placeholder:text-[#94a3b8] tracking-widest"
                 />
                 <button
                   type="submit"
-                  disabled={submittingPin || pinInput.length < 4}
+                  disabled={submittingPin || pinLockSeconds > 0 || pinInput.length < 4}
                   className="bg-[#e91e63] hover:bg-[#d81b60] text-white border-none rounded-lg py-2.5 px-4 text-sm font-bold cursor-pointer flex items-center gap-1.5 shrink-0 shadow-none transition-colors disabled:opacity-60"
                 >
                   <span>{submittingPin ? '...' : 'Entsperren'}</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
               </div>
+              <LoginLockNotice seconds={pinLockSeconds} />
               <div className="text-center">
                 <button
                   type="button"
