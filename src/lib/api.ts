@@ -39,6 +39,13 @@ export async function checkUser(username?: string) {
   return res.json();
 }
 
+export async function fetchLoginLockSeconds(): Promise<number> {
+  const res = await fetch(`${API_URL}/api/login-lock`, { headers: getHeaders(), cache: 'no-store' });
+  if (!res.ok) return 0;
+  const data = await res.json().catch(() => ({}));
+  return Math.max(0, Number(data.retryAfter) || 0);
+}
+
 export async function fetchCurrentSession() {
   const res = await fetch(`${API_URL}/api/session`, { headers: getHeaders(), credentials: 'same-origin' });
   if (!res.ok) return null;

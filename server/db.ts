@@ -257,8 +257,8 @@ export async function dbGetCalendarIpLoginLockRemaining(ipAddress: string): Prom
   const failures = rows.filter((row: any) => !row.successful)
     .map((row: any) => new Date(row.attempted_at).getTime());
   const recentFailures = failures.filter((time: number) => now - time <= 15 * 60 * 1000);
-  if (recentFailures.length < 8) return 0;
-  const escalation = Math.max(1, Math.ceil(failures.length / 8));
+  if (recentFailures.length < 5) return 0;
+  const escalation = Math.max(1, Math.ceil(failures.length / 5));
   const lockMs = Math.min(5 * 60 * 1000 * (2 ** (escalation - 1)), 7 * 24 * 60 * 60 * 1000);
   return Math.max(0, Math.ceil((Math.max(...recentFailures) + lockMs - now) / 1000));
 }

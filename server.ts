@@ -41,7 +41,6 @@ import {
   dbUpdateEvent,
   dbDeleteEvent,
   dbRecordCalendarLoginAttempt,
-  dbGetCalendarLoginLockRemaining,
   dbGetCalendarIpLoginLockRemaining,
   dbCleanupExpiredLoginAttempts,
   dbGetEventById,
@@ -220,6 +219,13 @@ async function startServer() {
   });
 
   // API Routes
+
+  app.get('/api/login-lock', async (req, res) => {
+    const ipAddress = req.ip || req.socket.remoteAddress || 'unknown';
+    const retryAfter = await dbGetCalendarIpLoginLockRemaining(ipAddress);
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ retryAfter });
+  });
   
   app.get('/api/check', async (req, res) => {
     const username = (req.query.username as string || '').toLowerCase();
@@ -233,6 +239,11 @@ async function startServer() {
     const user = await dbGetUser(username);
     if (!user) {
       await dbRecordCalendarLoginAttempt(username, ipAddress, false);
+      const retryAfter = await dbGetCalendarIpLoginLockRemaining(ipAddress);
+      if (retryAfter > 0) {
+        res.setHeader('Retry-After', String(retryAfter));
+        return res.status(429).json({ error: 'Zu viele Fehlversuche', retryAfter });
+      }
       return res.json({ exists: false, available: true, requiresPin: false });
     }
     if (user.status === 'BLOCKED' || user.status === 'VP_ONLY') {
@@ -246,87 +257,24 @@ async function startServer() {
     return res.status(403).json({ error: 'Registrierung zur Zeit deaktiviert.' });
   });
 
-  // Rate limiting for login attempts
-  const failedLoginAttempts = new Map<string, { count: number; lockUntil: number; lastFailedAt: number; lockLevel: number }>();
-  const LOGIN_WINDOW_MS = 15 * 60 * 1000;
-  const LOGIN_ESCALATION_MS = 30 * 24 * 60 * 60 * 1000;
-  const LOGIN_LOCK_MAX_MS = 7 * 24 * 60 * 60 * 1000;
-  const LOGIN_LOCK_BASE_MS = 5 * 60 * 1000;
-
-  function loginKey(username: string, ip: string): string {
-    return `${username}::${ip}`;
-  }
-
-  function cleanupAttempts() {
-    for (const [key, value] of failedLoginAttempts.entries()) {
-      if (value.lastFailedAt < Date.now() - LOGIN_ESCALATION_MS && value.lockUntil < Date.now()) {
-        failedLoginAttempts.delete(key);
-      }
-    }
-  }
-
-  function checkRateLimit(key: string): { allowed: boolean; remainingSeconds?: number } {
-    cleanupAttempts();
-    const attempt = failedLoginAttempts.get(key);
-    if (!attempt) return { allowed: true };
-    if (Date.now() < attempt.lockUntil) {
-      const remainingSeconds = Math.ceil((attempt.lockUntil - Date.now()) / 1000);
-      return { allowed: false, remainingSeconds };
-    }
-    return { allowed: true };
-  }
-
-  function recordFailedAttempt(key: string) {
-    const now = Date.now();
-    const current = failedLoginAttempts.get(key) || { count: 0, lockUntil: 0, lastFailedAt: now, lockLevel: 0 };
-    if (now - current.lastFailedAt > LOGIN_ESCALATION_MS) {
-      current.count = 0;
-      current.lockUntil = 0;
-      current.lockLevel = 0;
-    } else if (now - current.lastFailedAt > LOGIN_WINDOW_MS) {
-      current.count = 0;
-    }
-    current.count += 1;
-    current.lastFailedAt = now;
-    if (current.count >= 8) {
-      current.lockLevel += 1;
-      const lockDuration = Math.min(LOGIN_LOCK_BASE_MS * (2 ** (current.lockLevel - 1)), LOGIN_LOCK_MAX_MS);
-      current.lockUntil = now + lockDuration;
-      current.count = 0;
-    }
-    failedLoginAttempts.set(key, current);
-  }
-
-  function resetFailedAttempt(key: string) {
-    failedLoginAttempts.delete(key);
-  }
-
   app.post('/api/login', async (req, res) => {
     const { username, pin, sessionToken } = req.body;
     const uname = (username || '').toLowerCase();
     const ipAddress = req.ip || req.socket.remoteAddress || 'unknown';
-    const rateLimitKey = loginKey(uname, ipAddress);
     const recordLoginAttempt = (successful: boolean) => dbRecordCalendarLoginAttempt(uname, ipAddress, successful);
-
-    const rateCheck = checkRateLimit(rateLimitKey);
-    const [persistentRemaining, ipPersistentRemaining] = await Promise.all([
-      dbGetCalendarLoginLockRemaining(uname, ipAddress),
-      dbGetCalendarIpLoginLockRemaining(ipAddress)
-    ]);
-    const remainingSeconds = Math.max(rateCheck.remainingSeconds || 0, persistentRemaining, ipPersistentRemaining);
-    if (!rateCheck.allowed || remainingSeconds > 0) {
-      res.setHeader('Retry-After', String(remainingSeconds || 1));
+    const remainingSeconds = await dbGetCalendarIpLoginLockRemaining(ipAddress);
+    if (remainingSeconds > 0) {
+      res.setHeader('Retry-After', String(remainingSeconds));
       return res.status(429).json({ error: 'Zu viele Fehlversuche', retryAfter: remainingSeconds });
     }
 
     const user = await dbGetUser(uname);
     if (!user) {
-      recordFailedAttempt(rateLimitKey);
       await recordLoginAttempt(false);
-      const updatedLimit = checkRateLimit(rateLimitKey);
-      if (!updatedLimit.allowed) {
-        res.setHeader('Retry-After', String(updatedLimit.remainingSeconds || 1));
-        return res.status(429).json({ error: 'Zu viele Fehlversuche', retryAfter: updatedLimit.remainingSeconds });
+      const updatedLock = await dbGetCalendarIpLoginLockRemaining(ipAddress);
+      if (updatedLock > 0) {
+        res.setHeader('Retry-After', String(updatedLock));
+        return res.status(429).json({ error: 'Zu viele Fehlversuche', retryAfter: updatedLock });
       }
       return res.status(404).json({ error: 'Benutzer nicht gefunden' });
     }
@@ -344,12 +292,11 @@ async function startServer() {
         }
       } else {
         if (!verifyPin(pin, user.pin)) {
-          recordFailedAttempt(rateLimitKey);
           await recordLoginAttempt(false);
-          const updatedLimit = checkRateLimit(rateLimitKey);
-          if (!updatedLimit.allowed) {
-            res.setHeader('Retry-After', String(updatedLimit.remainingSeconds || 1));
-            return res.status(429).json({ error: 'Zu viele Fehlversuche', retryAfter: updatedLimit.remainingSeconds });
+          const updatedLock = await dbGetCalendarIpLoginLockRemaining(ipAddress);
+          if (updatedLock > 0) {
+            res.setHeader('Retry-After', String(updatedLock));
+            return res.status(429).json({ error: 'Zu viele Fehlversuche', retryAfter: updatedLock });
           }
           return res.status(401).json({ error: 'Falscher PIN' });
         }
@@ -359,7 +306,6 @@ async function startServer() {
       }
     }
 
-    resetFailedAttempt(rateLimitKey);
     await recordLoginAttempt(true);
     const token = await generateSessionToken(uname);
     res.setHeader('Set-Cookie', sessionCookies(token));

@@ -1,7 +1,7 @@
 import RequiredPin from '../components/RequiredPin';
 import { useState, useEffect, FormEvent } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { checkUser, loginUser, loginWithSessionToken, fetchCurrentSession, hasActiveSession, logoutSession, saveUserSettings } from '../lib/api';
+import { checkUser, loginUser, loginWithSessionToken, fetchCurrentSession, fetchLoginLockSeconds, hasActiveSession, logoutSession, saveUserSettings } from '../lib/api';
 import { getStoredSession, saveStoredSession, clearStoredSession } from '../lib/auth';
 import CalendarView from '../components/CalendarView';
 import AuthFooter from '../components/AuthFooter';
@@ -22,13 +22,24 @@ export default function UserDashboard() {
   const [pinInput, setPinInput] = useState('');
   const [pinError, setPinError] = useState('');
   const [submittingPin, setSubmittingPin] = useState(false);
-  const [pinLockSeconds, setPinLockSeconds] = useState(0);
+  const [pinLockUntil, setPinLockUntil] = useState<number | null>(null);
+  const [pinClockNow, setPinClockNow] = useState(Date.now());
+  const pinLockSeconds = pinLockUntil === null ? 0 : Math.max(0, Math.ceil((pinLockUntil - pinClockNow) / 1000));
+
+  const startPinLockCountdown = (seconds: number) => {
+    setPinClockNow(Date.now());
+    setPinLockUntil(Date.now() + seconds * 1000);
+  };
 
   useEffect(() => {
-    if (pinLockSeconds <= 0) return;
-    const timer = window.setInterval(() => setPinLockSeconds(value => Math.max(0, value - 1)), 1000);
+    if (pinLockUntil === null) return;
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      setPinClockNow(now);
+      if (now >= pinLockUntil) setPinLockUntil(null);
+    }, 250);
     return () => window.clearInterval(timer);
-  }, [pinLockSeconds > 0]);
+  }, [pinLockUntil]);
 
   useEffect(() => {
     if (!username) {
@@ -124,6 +135,12 @@ export default function UserDashboard() {
         setLoading(false);
         return;
       }
+      const lockSeconds = await fetchLoginLockSeconds();
+      if (lockSeconds > 0) {
+        startPinLockCountdown(lockSeconds);
+        setNeedsPin(true);
+        return;
+      }
       // 1. Check if user exists and whether PIN is required or if user is blocked
       const check = await checkUser(username);
       if (!check.exists) {
@@ -197,7 +214,11 @@ export default function UserDashboard() {
       setNeedsPin(true);
     } catch (err: any) {
       console.error('Error verifying user:', err);
-      if (err.message?.includes('gesperrt')) {
+      if (err.retryAfter) {
+        startPinLockCountdown(err.retryAfter);
+        setPinError('');
+        setNeedsPin(true);
+      } else if (err.message?.includes('gesperrt')) {
         setIsBlocked(true);
       } else {
         setPinError('Fehler bei der Verbindung zum Server.');
@@ -225,7 +246,7 @@ export default function UserDashboard() {
       setNeedsPin(false);
     } catch (err: any) {
       if (err.retryAfter) {
-        setPinLockSeconds(err.retryAfter);
+        startPinLockCountdown(err.retryAfter);
         setPinError('');
       } else if (err.message?.includes('gesperrt')) {
         clearStoredSession(username);
@@ -317,10 +338,10 @@ export default function UserDashboard() {
 
           {/* ONE-LINE FORMULAR */}
           <div className="w-full">
-            {(pinError || pinLockSeconds > 0) && (
+            {pinError && pinLockSeconds <= 0 && (
               <div className="mb-4 p-3.5 bg-[#fff1f2] border border-[#fecdd3] text-[#be123c] text-xs sm:text-sm rounded-xl flex items-center gap-2.5">
                 <AlertCircle className="w-4 h-4 shrink-0" />
-                <span>{pinError || 'Zu viele Fehlversuche'}</span>
+                <span>{pinError}</span>
               </div>
             )}
 

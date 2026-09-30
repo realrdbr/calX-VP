@@ -1801,7 +1801,7 @@ class AccountStore:
                 _log_slow_auth_stage("login_attempt_write", attempt_write_started)
 
             if not valid:
-                lock_after_failure = self._lock_remaining_seconds(connection, username, ip_address)
+                lock_after_failure = self._ip_lock_remaining_seconds(connection, ip_address)
             if valid and user_row is not None:
                 # Expired attempts are pruned by the background worker. A
                 # per-login DELETE scans the unindexed timestamp column and
@@ -1811,7 +1811,7 @@ class AccountStore:
                 _log_slow_auth_stage("user_decode", user_decode_started)
                 return user
         if lock_after_failure:
-            raise LoginLockedError(lock_after_failure)
+            raise IpLoginLockedError(lock_after_failure)
         return None
 
     @staticmethod

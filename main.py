@@ -327,7 +327,8 @@ class AppRequestHandler(BaseHTTPRequestHandler):
             if self._session():
                 redirect(self, "/")
             else:
-                send_html(self, render_login())
+                remaining = self.store.ip_lock_remaining_seconds(self._client_ip())
+                send_html(self, render_login(locked_seconds=remaining))
             return
         session_started = time.monotonic()
         session = self._session()
@@ -417,7 +418,8 @@ class AppRequestHandler(BaseHTTPRequestHandler):
             stage = "restart" if "restart" in stages else self._field(data, "stage")
             username = self._field(data, "username").strip()
             if stage == "restart":
-                send_html(self, render_login())
+                remaining = self.store.ip_lock_remaining_seconds(self._client_ip())
+                send_html(self, render_login(username=username, locked_seconds=remaining))
                 return
             if stage == "username":
                 login_ip = self._client_ip()
@@ -432,6 +434,10 @@ class AppRequestHandler(BaseHTTPRequestHandler):
                     resolved_username, requires_pin = self.store.get_login_identity(username)
                 except ValueError:
                     self.store.record_failed_login_attempt(username, login_ip)
+                    remaining = self.store.ip_lock_remaining_seconds(login_ip)
+                    if remaining:
+                        send_html(self, render_login("Zu viele Fehlversuche", username=username, locked_seconds=remaining))
+                        return
                     send_html(self, render_login("Dieser Benutzername existiert nicht.", username=username))
                     return
                 if not requires_pin:
@@ -455,6 +461,10 @@ class AppRequestHandler(BaseHTTPRequestHandler):
                 return
             if len(pin) != 4 or not pin.isascii() or not pin.isdigit():
                 self.store.record_failed_login_attempt(username, login_ip)
+                remaining = self.store.ip_lock_remaining_seconds(login_ip)
+                if remaining:
+                    send_html(self, render_login("Zu viele Fehlversuche", username=username, pin_step=True, locked_seconds=remaining))
+                    return
                 send_html(self, render_login("Die PIN muss aus genau vier Ziffern bestehen.", username=username, pin_step=True))
                 return
             client_ip_started = time.monotonic()

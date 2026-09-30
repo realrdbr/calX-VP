@@ -146,14 +146,10 @@ button:not(.theme-toggle) {{ min-height:38px; border:1px solid var(--primary); b
 .calendar-login-control button {{ flex:0 0 auto; width:auto; min-height:40px; padding:8px 16px; border:0; border-radius:8px; background:#e91e63; font-weight:750; }}
 .calendar-login-back {{ justify-self:center; min-height:auto !important; padding:4px 8px !important; border:0 !important; background:transparent !important; color:var(--muted) !important; font-size:.78rem !important; }}
 .calendar-login .notice {{ width:100%; margin:0 0 12px; }}
-.login-lock-notice {{ display:flex; align-items:flex-start; gap:12px; margin:0; padding:12px 16px; border:1px solid #fecdd3; border-radius:12px; background:#fff1f2; color:#4c0519; }}
-.login-lock-icon {{ display:flex; align-items:center; justify-content:center; flex:0 0 32px; width:32px; height:32px; margin-top:2px; border-radius:50%; background:#ffe4e6; color:#e11d48; }}
-.login-lock-icon svg {{ width:17px; height:17px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }}
-.login-lock-copy {{ display:grid; gap:3px; min-width:0; }}
-.login-lock-copy strong {{ font-size:.875rem; line-height:1.4; }}
-.login-lock-copy small {{ color:#9f1239; font-size:.75rem; line-height:1.5; }}
-.login-lock-minutes {{ font-weight:800; font-variant-numeric:tabular-nums; }}
-@media (prefers-color-scheme: dark) {{ .login-lock-notice {{ border-color:#881337; background:rgba(76,5,25,.45); color:#ffe4e6; }} .login-lock-icon {{ background:rgba(136,19,55,.65); color:#fecdd3; }} .login-lock-copy small {{ color:#fecdd3; }} }}
+.login-lock-notice {{ width:100%; margin:0; padding:12px 14px; border:1px solid #f48fb1; border-radius:12px; background:#fce4ec; color:#ad1457; font-size:.875rem; font-weight:600; line-height:1.45; text-align:center; }}
+.login-lock-time {{ font-weight:800; font-variant-numeric:tabular-nums; }}
+html[data-theme="dark"] .login-lock-notice {{ border-color:#8e3b59; background:#351420; color:#ff8bb3; }}
+@media (prefers-color-scheme: dark) {{ html:not([data-theme="light"]) .login-lock-notice {{ border-color:#8e3b59; background:#351420; color:#ff8bb3; }} }}
 .calendar-login-footer {{ width:100%; padding:16px 24px; border-top:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; color:var(--muted); font-size:.8rem; font-weight:650; }}
 .calendar-login-footer a {{ color:var(--text); text-decoration:none; }}
 .calendar-login-footer button {{ min-height:0; padding:0; border:0; background:transparent; color:var(--text); font:inherit; font-weight:700; cursor:pointer; }}
@@ -161,7 +157,7 @@ button:not(.theme-toggle) {{ min-height:38px; border:1px solid var(--primary); b
 
 
 def render_login(error: str | None = None, *, username: str = "", pin_step: bool = False, locked_seconds: int = 0) -> str:
-    notice = f'<p class="notice">{escape(error)}</p>' if error else ""
+    notice = f'<p class="notice">{escape(error)}</p>' if error and locked_seconds <= 0 else ""
     if pin_step:
         disabled = " disabled" if locked_seconds > 0 else ""
         form = f"""
@@ -171,10 +167,10 @@ def render_login(error: str | None = None, *, username: str = "", pin_step: bool
           <div class="calendar-login-control"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg><input name="pin" type="password" inputmode="numeric" pattern="[0-9]{{4}}" minlength="4" maxlength="4"
               autocomplete="current-password" aria-label="Vierstellige PIN für {escape(username)}" placeholder="PIN für {escape(username)}" required autofocus data-pin-input{disabled}>
             <button type="submit" data-pin-submit{disabled}>Entsperren <span aria-hidden="true">→</span></button></div>
-          <div class="login-lock-notice" data-lock-status role="status" aria-live="polite"{'' if locked_seconds > 0 else ' hidden'}><span class="login-lock-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4.5 6v5.5c0 4.7 3.2 8 7.5 9.5 4.3-1.5 7.5-4.8 7.5-9.5V6L12 3Z"></path><path d="M12 8v4m0 3h.01"></path></svg></span><span class="login-lock-copy"><strong>Anmeldung für diese IP gesperrt</strong><small>Erneut möglich in <span class="login-lock-minutes" data-lock-minutes></span> Minuten.</small></span></div>
+          <p class="login-lock-notice" data-lock-status role="status" aria-live="polite"{'' if locked_seconds > 0 else ' hidden'}>Zu viele Anmeldungen, versuche es in <span class="login-lock-time" data-lock-time></span> erneut</p>
           <button class="calendar-login-back" type="submit" name="stage" value="restart" formnovalidate>‹ Anderen Benutzer verwenden</button>
         </form>
-        <script>(() => {{ const input=document.querySelector('[data-pin-input]'); if(input) input.addEventListener('input',()=>input.value=input.value.replace(/\\D/g,'').slice(0,4)); let remaining={max(0, int(locked_seconds))}; const status=document.querySelector('[data-lock-status]'); const minutes=document.querySelector('[data-lock-minutes]'); const submit=document.querySelector('[data-pin-submit]'); const tick=()=>{{ if(!status)return; if(remaining>0){{status.hidden=false;if(minutes)minutes.textContent=String(Math.ceil(remaining/60));if(input)input.disabled=true;if(submit)submit.disabled=true;remaining--;setTimeout(tick,1000);}}else{{status.hidden=true;if(input)input.disabled=false;if(submit)submit.disabled=false;}} }}; if(remaining>0)tick(); }})();</script>
+        <script>(() => {{ const input=document.querySelector('[data-pin-input]'); if(input) input.addEventListener('input',()=>input.value=input.value.replace(/\\D/g,'').slice(0,4)); let lockUntil=Date.now()+{max(0, int(locked_seconds))}*1000; const status=document.querySelector('[data-lock-status]'); const time=document.querySelector('[data-lock-time]'); const submit=document.querySelector('[data-pin-submit]'); const tick=()=>{{ if(!status)return; const remaining=Math.max(0,Math.ceil((lockUntil-Date.now())/1000)); if(remaining>0){{status.hidden=false;if(time)time.textContent=Math.floor(remaining/60)+':'+String(remaining%60).padStart(2,'0');if(input)input.disabled=true;if(submit)submit.disabled=true;setTimeout(tick,1000);}}else{{status.hidden=true;if(input)input.disabled=false;if(submit)submit.disabled=false;}} }}; if(lockUntil>Date.now())tick(); }})();</script>
         """
     else:
         disabled = " disabled" if locked_seconds > 0 else ""
@@ -183,9 +179,9 @@ def render_login(error: str | None = None, *, username: str = "", pin_step: bool
           <input type="hidden" name="stage" value="username">
           <div class="calendar-login-control"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20a7 7 0 0 1 14 0"></path></svg><input name="username" value="{escape(username)}" autocomplete="username" placeholder="z.B. SophiaM" aria-label="Dein Benutzername" required minlength="3" maxlength="64" autofocus spellcheck="false" data-username-input{disabled}>
             <button type="submit" data-username-submit{disabled}>Weiter <span aria-hidden="true">→</span></button></div>
-          <div class="login-lock-notice" data-lock-status role="status" aria-live="polite"{'' if locked_seconds > 0 else ' hidden'}><span class="login-lock-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4.5 6v5.5c0 4.7 3.2 8 7.5 9.5 4.3-1.5 7.5-4.8 7.5-9.5V6L12 3Z"></path><path d="M12 8v4m0 3h.01"></path></svg></span><span class="login-lock-copy"><strong>Anmeldung für diese IP gesperrt</strong><small>Erneut möglich in <span class="login-lock-minutes" data-lock-minutes></span> Minuten.</small></span></div>
+          <p class="login-lock-notice" data-lock-status role="status" aria-live="polite"{'' if locked_seconds > 0 else ' hidden'}>Zu viele Anmeldungen, versuche es in <span class="login-lock-time" data-lock-time></span> erneut</p>
         </form>
-        <script>(() => {{ let remaining={max(0, int(locked_seconds))}; const status=document.querySelector('[data-lock-status]'); const minutes=document.querySelector('[data-lock-minutes]'); const input=document.querySelector('[data-username-input]'); const submit=document.querySelector('[data-username-submit]'); const tick=()=>{{ if(!status)return; if(remaining>0){{status.hidden=false;if(minutes)minutes.textContent=String(Math.ceil(remaining/60));if(input)input.disabled=true;if(submit)submit.disabled=true;remaining--;setTimeout(tick,1000);}}else{{status.hidden=true;if(input)input.disabled=false;if(submit)submit.disabled=false;}} }}; if(remaining>0)tick(); }})();</script>
+        <script>(() => {{ let lockUntil=Date.now()+{max(0, int(locked_seconds))}*1000; const status=document.querySelector('[data-lock-status]'); const time=document.querySelector('[data-lock-time]'); const input=document.querySelector('[data-username-input]'); const submit=document.querySelector('[data-username-submit]'); const tick=()=>{{ if(!status)return; const remaining=Math.max(0,Math.ceil((lockUntil-Date.now())/1000)); if(remaining>0){{status.hidden=false;if(time)time.textContent=Math.floor(remaining/60)+':'+String(remaining%60).padStart(2,'0');if(input)input.disabled=true;if(submit)submit.disabled=true;setTimeout(tick,1000);}}else{{status.hidden=true;if(input)input.disabled=false;if(submit)submit.disabled=false;}} }}; if(lockUntil>Date.now())tick(); }})();</script>
         """
     return _layout("Vertretungsplan", f"""
     <div class="calendar-login"><section class="calendar-login-shell"><header class="calendar-login-header"><picture><source media="(prefers-color-scheme: dark)" srcset="/icons/logo_dark.webp"><img class="login-product-logo" src="/icons/logo_white.webp" alt="cal11"></picture><h1>Vertretungsplan</h1></header>

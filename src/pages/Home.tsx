@@ -1,6 +1,6 @@
 import { useState, FormEvent, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { checkUser, registerUser, loginUser, fetchCurrentSession } from '../lib/api';
+import { checkUser, registerUser, loginUser, fetchCurrentSession, fetchLoginLockSeconds } from '../lib/api';
 import { saveStoredSession } from '../lib/auth';
 import { Lock, User, ArrowRight, ChevronLeft, AlertCircle } from 'lucide-react';
 import AuthFooter from '../components/AuthFooter';
@@ -13,14 +13,46 @@ export default function Home() {
   const [error, setError] = useState('');
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [loading, setLoading] = useState(false);
-  const [lockSeconds, setLockSeconds] = useState(0);
+  const [lockUntil, setLockUntil] = useState<number | null>(null);
+  const [clockNow, setClockNow] = useState(Date.now());
+  const lockSeconds = lockUntil === null ? 0 : Math.max(0, Math.ceil((lockUntil - clockNow) / 1000));
   const navigate = useNavigate();
 
+  const startLockCountdown = (seconds: number) => {
+    setClockNow(Date.now());
+    setLockUntil(Date.now() + seconds * 1000);
+  };
+
   useEffect(() => {
-    if (lockSeconds <= 0) return;
-    const timer = window.setInterval(() => setLockSeconds(value => Math.max(0, value - 1)), 1000);
+    let disposed = false;
+    const refreshLock = async () => {
+      try {
+        const remaining = await fetchLoginLockSeconds();
+        if (!disposed) {
+          if (remaining > 0) startLockCountdown(remaining);
+          else setLockUntil(null);
+        }
+      } catch {
+        // The login route remains protected server-side if status lookup fails.
+      }
+    };
+    void refreshLock();
+    window.addEventListener('focus', refreshLock);
+    return () => {
+      disposed = true;
+      window.removeEventListener('focus', refreshLock);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (lockUntil === null) return;
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      setClockNow(now);
+      if (now >= lockUntil) setLockUntil(null);
+    }, 250);
     return () => window.clearInterval(timer);
-  }, [lockSeconds > 0]);
+  }, [lockUntil]);
 
   useEffect(() => {
     let disposed = false;
@@ -84,7 +116,7 @@ export default function Home() {
       }
     } catch (err: any) {
       if (err.retryAfter) {
-        setLockSeconds(err.retryAfter);
+        startLockCountdown(err.retryAfter);
         setError('');
       } else {
         setError(err.message || 'Fehler bei der Verbindung zum Server');
@@ -119,7 +151,7 @@ export default function Home() {
       navigate(`/${res.user.username}`);
     } catch (err: any) {
       if (err.retryAfter) {
-        setLockSeconds(err.retryAfter);
+        startLockCountdown(err.retryAfter);
         setError('');
       } else {
         setError(err.message || 'Falscher PIN-Code');
@@ -146,15 +178,15 @@ export default function Home() {
 
         {/* ONE-LINE FORMULAR */}
         <div className="w-full">
-          {(error || lockSeconds > 0) && (
+          {error && lockSeconds <= 0 && (
             <div className="mb-4 p-3.5 bg-[#fff1f2] dark:bg-[#3f1d24] border border-[#fecdd3] dark:border-[#7f1d3a] text-[#be123c] dark:text-[#fecdd3] text-xs sm:text-sm rounded-xl flex items-center gap-2.5">
               <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>{error || 'Zu viele Fehlversuche'}</span>
+              <span>{error}</span>
             </div>
           )}
 
           {step === 1 ? (
-            <form onSubmit={handleNext} className="w-full">
+            <form onSubmit={handleNext} className="w-full space-y-3">
               <div className="w-full bg-white dark:bg-[#1e1e1e] border-[1.5px] border-[#cbd5e1] dark:border-[#444] focus-within:border-[#e91e63] rounded-xl p-1.5 pl-3.5 flex items-center shadow-none transition-colors h-[52px]">
                 <div className="text-[#94a3b8] mr-2.5 shrink-0 flex items-center">
                   <User className="w-[18px] h-[18px]" />

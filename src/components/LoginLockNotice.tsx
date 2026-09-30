@@ -1,26 +1,16 @@
-import { ShieldAlert } from 'lucide-react';
-
 type Props = { seconds: number };
 
 export default function LoginLockNotice({ seconds }: Props) {
   if (seconds <= 0) return null;
-  const minutes = Math.ceil(seconds / 60);
+  const countdown = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 
   return (
     <div
-      className="mt-3 flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-rose-950 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-100"
+      className="rounded-xl border border-[#f48fb1] bg-[#fce4ec] px-3.5 py-3 text-center text-sm font-semibold text-[#ad1457] dark:border-[#8e3b59] dark:bg-[#351420] dark:text-[#ff8bb3]"
       role="status"
       aria-live="polite"
     >
-        <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-rose-100 text-rose-600 dark:bg-rose-900/70 dark:text-rose-200">
-        <ShieldAlert className="h-4 w-4" aria-hidden="true" />
-      </span>
-      <span className="min-w-0">
-        <span className="block text-sm font-bold">Anmeldung für diese IP gesperrt</span>
-        <span className="mt-0.5 block text-xs leading-relaxed text-rose-800 dark:text-rose-200">
-          Erneut möglich in <span className="font-bold tabular-nums">{minutes} Minuten</span>.
-        </span>
-      </span>
+      Zu viele Anmeldungen, versuche es in <span className="font-extrabold tabular-nums">{countdown}</span> erneut
     </div>
   );
 }
