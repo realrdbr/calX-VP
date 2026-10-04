@@ -66,24 +66,47 @@ def fetch_weekly_plans(access, start_date: date | None = None) -> dict[date, Wee
     basis_response.raise_for_status()
     basis = ElementTree.fromstring(basis_response.content)
 
-    selected = None
-    for week in basis.findall(".//Sw"):
-        begin = datetime.strptime(week.attrib["SwDatumVon"], "%d.%m.%Y").date()
-        end = datetime.strptime(week.attrib["SwDatumBis"], "%d.%m.%Y").date()
-        if begin <= monday <= end:
-            selected = week
-            break
+    indexed_weeks = [
+        (
+            week,
+            datetime.strptime(week.attrib["SwDatumVon"], "%d.%m.%Y").date(),
+            datetime.strptime(week.attrib["SwDatumBis"], "%d.%m.%Y").date(),
+        )
+        for week in basis.findall(".//Sw")
+    ]
+    selected_entry = next(
+        (entry for entry in indexed_weeks if entry[1] <= monday <= entry[2]),
+        None,
+    )
+    selected = selected_entry[0] if selected_entry else None
     if selected is None:
-        raise requests.HTTPError(f"Kein Stundenplan24-Wochenplan für {monday.isoformat()} vorhanden.")
+        if not indexed_weeks:
+            raise requests.HTTPError("Stundenplan24 enthält keine Schulwochen.")
+        # Außerhalb des veröffentlichten Bereichs die nächstgelegene
+        # Unterrichtswoche als Vorlage verwenden, aber die angefragten Tage
+        # beibehalten.
+        selected, _, _ = min(
+            indexed_weeks,
+            key=lambda item: min(abs((monday - item[1]).days), abs((monday - item[2]).days)),
+        )
 
     week_number = selected.text or ""
     week_type = selected.attrib.get("SwWo", "")
     plan_response = requests.get(base_url + f"wdatenk/SPlanKl_Sw{week_number}.xml", auth=auth, timeout=15)
     if plan_response.status_code == 404:
-        # Schools often publish one current XML containing both A/B variants,
-        # while the index already lists future weeks. Reuse the newest
-        # published weekly XML as a template when the requested file is absent.
-        for fallback_number in range(int(week_number) - 1, 0, -1):
+        # Reuse the nearest available weekly XML when the requested one has
+        # been removed or has not yet been published.
+        candidates = []
+        for week, begin, end in indexed_weeks:
+            number = (week.text or "").strip()
+            if number and number != week_number:
+                distance = min(abs((monday - begin).days), abs((monday - end).days))
+                candidates.append((distance, number))
+        seen_numbers = set()
+        for _, fallback_number in sorted(candidates):
+            if fallback_number in seen_numbers:
+                continue
+            seen_numbers.add(fallback_number)
             fallback = requests.get(
                 base_url + f"wdatenk/SPlanKl_Sw{fallback_number}.xml",
                 auth=auth,
@@ -92,6 +115,8 @@ def fetch_weekly_plans(access, start_date: date | None = None) -> dict[date, Wee
             if fallback.ok:
                 plan_response = fallback
                 break
+            if fallback.status_code != 404:
+                fallback.raise_for_status()
     plan_response.raise_for_status()
     root = ElementTree.fromstring(plan_response.content)
     daily_classes: dict[int, dict[str, WeeklyClass]] = {day: {} for day in range(1, 6)}

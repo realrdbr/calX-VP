@@ -614,8 +614,6 @@ def get_week_plans_for_page(selected_date: date) -> dict[date, object | None]:
     """Lädt Tagespläne cache-first und ergänzt fehlende Tage mit dem Wochenplan."""
 
     week_plans = {}
-    has_cached_data = False
-
     for plan_date in get_school_week_dates(selected_date):
         with _page_cache_lock:
             cached_plan = _page_plan_cache.get(plan_date)
@@ -627,34 +625,25 @@ def get_week_plans_for_page(selected_date: date) -> dict[date, object | None]:
                 with _page_cache_lock:
                     _page_plan_cache[plan_date] = cached_plan
 
-        if cached_plan is not None:
-            has_cached_data = True
-
         week_plans[plan_date] = cached_plan
 
-    if has_cached_data:
-        # Liegen Tagesdaten vor, wird die Seite strikt ohne Netzwerkwartezeit
-        # gerendert. Ein vorhandener Wochen-Cache ergänzt fehlende Tage sofort;
-        # fehlt er noch, startet sein Abruf ausschließlich im Hintergrund.
-        official_week = get_cached_official_weekly_plans_for_page(selected_date)
-        if any(plan is None for plan in week_plans.values()) and official_week is None:
-            refresh_official_weekly_plans_in_background(_week_monday(selected_date))
-        if official_week:
-            for plan_date, official_plan in official_week.items():
-                if week_plans.get(plan_date) is None:
-                    week_plans[plan_date] = official_plan
-        for plan_date in week_plans:
-            refresh_plan_in_background(plan_date)
+    # Ergänze fehlende Tagespläne immer mit dem normalen Wochenstundenplan.
+    # Bisher geschah das nur, wenn mindestens ein Tagesplan vorhanden war.
+    # Damit blieb eine komplett datenfreie Woche dauerhaft leer, obwohl der
+    # offizielle Wochenplan im Cache lag (typisch für Zukunft, Vergangenheit
+    # und Ferienränder).
+    official_week = get_cached_official_weekly_plans_for_page(selected_date)
+    if official_week is None:
+        refresh_official_weekly_plans_in_background(_week_monday(selected_date))
+    else:
+        for plan_date, official_plan in official_week.items():
+            if week_plans.get(plan_date) is None:
+                week_plans[plan_date] = official_plan
 
-        return week_plans
-
-    # Beim Kaltstart darf eine interaktive Seitenanfrage nicht fünf Tagespläne
-    # synchron über das Netzwerk laden. Starte die Tages- und Wochenabrufe im
-    # Hintergrund; der vorhandene Versions-Poller lädt die fertigen Pläne nach.
+    # Tagespläne werden unabhängig davon im Hintergrund aktualisiert. Dadurch
+    # ersetzt ein später eintreffender Vertretungsplan weiter den Normalplan.
     for plan_date in week_plans:
         refresh_plan_in_background(plan_date)
-    refresh_official_weekly_plans_in_background(_week_monday(selected_date))
-
     return week_plans
 
 

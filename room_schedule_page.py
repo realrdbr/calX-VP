@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 from lesson_status import has_value
 from teacher_page import (_normalize_teacher_lesson, render_teacher_page,
                           render_teacher_week_table, render_week_navigation)
-from vp_data import get_week_plans_for_page, get_official_weekly_plans_for_page, ResourceNotFound
+from vp_data import get_week_plans_for_page, get_official_weekly_plans_for_page, get_subject_catalog_plans_for_page, ResourceNotFound
 from web_utils import format_week_value
 
 
@@ -33,7 +33,7 @@ def room_assignments(plan):
 
 
 def available_rooms(*weeks):
-    rooms = {room for week in weeks for plan in week.values() if plan is not None
+    rooms = {room for week in weeks for plan in (week.values() if hasattr(week, 'values') else week) if plan is not None
              for room, _, _ in room_assignments(plan)}
     return sorted(rooms, key=lambda room: [(0, int(part)) if part.isdigit() else (1, part.casefold())
                                          for part in re.split(r'(\d+)', room)])
@@ -125,6 +125,9 @@ def render_room_schedule_page(selected_date, selected_room=None, *, block_mode=F
             catalogues.append(get_official_weekly_plans_for_page(anchor))
         except ResourceNotFound:
             missing_normal = True
+    catalog_plans = get_subject_catalog_plans_for_page()
+    if catalog_plans:
+        catalogues.append(catalog_plans)
     rooms = available_rooms(*catalogues)
 
     def url(room, **extra):
@@ -139,8 +142,10 @@ def render_room_schedule_page(selected_date, selected_room=None, *, block_mode=F
         content += ''.join(f'<a class="choice-card" href="{escape(url(room), quote=True)}">{escape(room)}</a>' for room in rooms)
         content += '</section>'
         if not rooms:
-            content += '<p class="empty">In diesen zwei Wochen wurden keine Räume gefunden.</p>'
+            content += '<p class="empty">Für diese Wochen liegen noch keine Raumplandaten vor. Die Raumauswahl erscheint, sobald die Wochenpläne geladen sind.</p>'
     else:
+        if not any(plan is not None for plan in week.values()):
+            content += '<p class="empty">Für diese Woche liegen keine Plandaten vor.</p>'
         options = ''.join(f'<option value="{escape(url(room), quote=True)}" {"selected" if room == selected_room else ""}>{escape(room)}</option>' for room in rooms)
         content += f'''<div class="room-toolbar">{switch}<section class="message class-message"><h2 class="room-heading">Raum {escape(selected_room)}</h2>
           <label class="block-switch"><span>Block-Unterricht</span><input type="checkbox" {'checked' if block_mode else ''}

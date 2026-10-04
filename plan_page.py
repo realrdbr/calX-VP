@@ -122,12 +122,16 @@ def get_selected_class_cookie_name(username: str) -> str:
     return f"selected_class_{safe_username or 'user'}"
 
 
-def get_available_classes(week_plans: dict[date, object | None]) -> list[str]:
+def get_available_classes(
+    week_plans: dict[date, object | None],
+    catalogue_plans: list[object] | None = None,
+) -> list[str]:
     """Sammelt alle Klassen, die in mindestens einem Wochenplan vorkommen."""
 
     classes = set()
 
-    for plan in week_plans.values():
+    plans = list(week_plans.values()) + list(catalogue_plans or [])
+    for plan in plans:
         if plan is None:
             continue
 
@@ -209,12 +213,15 @@ def collect_week_lessons(
     return week_lessons
 
 
-def render_class_selection(week_plans: dict[date, object | None], selected_date: date) -> str:
+def render_class_selection(
+    week_plans: dict[date, object | None], selected_date: date,
+    available_classes: list[str] | None = None,
+) -> str:
     """Rendert die Klassenauswahl."""
 
     class_links = []
 
-    for class_name in get_available_classes(week_plans):
+    for class_name in available_classes if available_classes is not None else get_available_classes(week_plans):
         query = urlencode({
             "woche": format_week_value(selected_date),
             "klasse": class_name,
@@ -225,7 +232,7 @@ def render_class_selection(week_plans: dict[date, object | None], selected_date:
         )
 
     if not class_links:
-        return '<p class="empty">Es wurden keine Klassen gefunden.</p>'
+        return '<p class="empty">Für diese Woche sind keine Klassen im Stundenplanverzeichnis verfügbar.</p>'
 
     return f"""
         <section class="message">
@@ -565,12 +572,15 @@ def render_plan_page(
         plan_timestamp_text = get_latest_timestamp_text(week_plans)
         week_version = get_week_version(week_plans)
 
-        available_classes = get_available_classes(week_plans)
+        catalogue_plans = get_subject_catalog_plans_for_page()
+        available_classes = get_available_classes(week_plans, catalogue_plans)
 
         if not selected_class or selected_class not in available_classes:
-            content = render_class_selection(week_plans, selected_date)
+            content = render_class_selection(week_plans, selected_date, available_classes)
         else:
+            no_week_data = not any(plan is not None for plan in week_plans.values())
             content = f"""
+                {'<p class="empty">Für diese Woche liegen keine Plandaten vor.</p>' if no_week_data else ''}
                 <section class="message class-message">
                     <div>
                         <h2>Klasse {escape(selected_class)}</h2>
@@ -585,7 +595,7 @@ def render_plan_page(
                                         <select class="class-select" aria-label="Klasse auswählen" data-plan-class-select>{''.join(f'<option value="/?woche={format_week_value(selected_date)}&amp;klasse={escape(class_name)}{"&amp;block=1" if block_mode else ""}"{" selected" if class_name == selected_class else ""}>{escape(class_name)}</option>' for class_name in available_classes)}</select>
                 </section>
 
-                {render_subject_filter(week_plans, selected_date, selected_class, selected_subjects, get_subject_catalog_plans_for_page() or [plan for plan in week_plans.values() if plan is not None], filters_active, block_mode)}
+                {render_subject_filter(week_plans, selected_date, selected_class, selected_subjects, catalogue_plans or [plan for plan in week_plans.values() if plan is not None], filters_active, block_mode)}
 
                 {render_week_table(week_plans, selected_class, selected_subjects if filters_active else [], weekly_dates, block_mode)}
             """

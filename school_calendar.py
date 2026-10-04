@@ -116,7 +116,11 @@ def school_week(value):
     monday = value - timedelta(days=value.weekday())
     if not _weeks or monday in _weeks:
         return monday
-    return next((week for week in _weeks if week >= monday), _weeks[-1])
+    today = date.today()
+    current_monday = today - timedelta(days=today.weekday())
+    if monday >= current_monday:
+        return next((week for week in _weeks if week > monday), _weeks[-1])
+    return next((week for week in reversed(_weeks) if week < monday), _weeks[0])
 
 
 def adjacent_school_week(value, direction=1):

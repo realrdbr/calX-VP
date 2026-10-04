@@ -1,4 +1,4 @@
-from school_calendar import school_week, adjacent_school_week
+from school_calendar import school_week, adjacent_school_week, refresh_school_weeks
 from lesson_status import is_cancelled, detail_signature, has_value
 import json
 from datetime import date, timedelta
@@ -12,6 +12,11 @@ from vp_data import (
     Unauthorized,
     get_week_plans_for_page,
     get_cached_official_weekly_plans_for_page,
+    get_subject_catalog_plans_for_page,
+    SCHULNUMMER,
+    BENUTZERNAME,
+    PASSWORT,
+    CACHE_DIR,
 )
 from web_utils import (
     CALENDAR_PUBLIC_URL,
@@ -97,7 +102,9 @@ def cancelled_teacher_assignments(plan, plan_date):
                         yield teacher, period, _normalize_teacher_lesson(lesson, class_name)
 
 
-def get_available_teachers(week_plans: dict[date, object | None]) -> list[str]:
+def get_available_teachers(
+    week_plans: dict[date, object | None], catalogue_plans: list[object] | None = None,
+) -> list[str]:
     """Sammelt alle Lehrerkürzel, die in der Woche vorkommen."""
 
     teachers = set()
@@ -113,6 +120,17 @@ def get_available_teachers(week_plans: dict[date, object | None]) -> list[str]:
 
         for class_item in getattr(plan, "klassen", {}).values():
             for lesson_items in class_item.stunden.values():
+                for lesson in lesson_items:
+                    teachers.update(teacher for teacher in getattr(lesson, "lehrer", ()) if teacher)
+
+    for plan in catalogue_plans or []:
+        if plan is None:
+            continue
+        if hasattr(plan, "lehrer"):
+            teachers.update(getattr(plan, "lehrer").keys())
+            continue
+        for class_item in getattr(plan, "klassen", {}).values():
+            for lesson_items in getattr(class_item, "stunden", {}).values():
                 for lesson in lesson_items:
                     teachers.update(teacher for teacher in getattr(lesson, "lehrer", ()) if teacher)
 
@@ -181,12 +199,16 @@ def collect_teacher_lessons(
     return week_lessons
 
 
-def render_teacher_selection(week_plans: dict[date, object | None], selected_date: date) -> str:
+def render_teacher_selection(
+    week_plans: dict[date, object | None], selected_date: date,
+    available_teachers: list[str] | None = None,
+) -> str:
     """Rendert die Auswahl aller Lehrer."""
 
     teacher_links = []
 
-    for teacher in get_available_teachers(week_plans):
+    teachers = available_teachers if available_teachers is not None else get_available_teachers(week_plans)
+    for teacher in teachers:
         query = urlencode({
             "woche": format_week_value(selected_date),
             "lehrer": teacher,
@@ -197,7 +219,7 @@ def render_teacher_selection(week_plans: dict[date, object | None], selected_dat
         )
 
     if not teacher_links:
-        return '<p class="empty">Es wurden keine Lehrer gefunden.</p>'
+        return '<p class="empty">Für diese Woche liegen noch keine Plandaten vor. Die Lehrerauswahl erscheint, sobald der Wochenplan geladen ist.</p>'
 
     return f"""
         <section class="message">
@@ -494,14 +516,17 @@ def render_teacher_page(
                     catalogue.update(get_week_plans_for_page(next_week))
                 except ResourceNotFound:
                     pass
-            available_teachers = get_available_teachers(catalogue)
+            subject_catalogue = get_subject_catalog_plans_for_page()
+            available_teachers = get_available_teachers(catalogue, subject_catalogue)
 
         if page_content is not None:
             content = page_content
         elif not selected_teacher or selected_teacher not in available_teachers:
-            content = render_teacher_selection(catalogue, selected_date)
+            content = render_teacher_selection(catalogue, selected_date, available_teachers)
         else:
+            no_week_data = not any(plan is not None for plan in week_plans.values())
             content = f"""
+                {'<p class="empty">Für diese Woche liegen keine Plandaten vor.</p>' if no_week_data else ''}
                 <section class="message class-message">
                     <div>
                         <h2>Lehrer {escape(selected_teacher)}</h2>
@@ -1208,6 +1233,7 @@ class TeacherPageHandler(BaseHTTPRequestHandler):
 
         parsed_url = urlparse(self.path)
         query = parse_qs(parsed_url.query)
+        refresh_school_weeks(SCHULNUMMER, BENUTZERNAME, PASSWORT, CACHE_DIR, background=True)
 
         if parsed_url.path == "/api/plan-version":
             selected_date = parse_week(query_value(query, "woche"))
@@ -1227,6 +1253,13 @@ class TeacherPageHandler(BaseHTTPRequestHandler):
         selected_date = parse_week(query_value(query, "woche"))
         selected_teacher = query_value(query, "lehrer") or browser_cookies.get("selected_teacher")
         cookie_headers = []
+
+        available_date = school_week(selected_date)
+        if available_date != selected_date:
+            query["woche"] = [format_week_value(available_date)]
+            target = parsed_url.path + "?" + urlencode(query, doseq=True)
+            redirect(self, target)
+            return
 
         if query_value(query, "lehrer_clear") == "1":
             selected_teacher = None
