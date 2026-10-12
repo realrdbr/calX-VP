@@ -326,7 +326,8 @@ def render_teacher_week_table(
 
     week_lessons = collect_teacher_lessons(week_plans, selected_teacher)
 
-    if not week_lessons and not show_empty:
+    has_free_days = any(getattr(plan, "unterrichtsfrei", False) for plan in week_plans.values())
+    if not week_lessons and not show_empty and not has_free_days:
         return '<p class="empty">Für diesen Lehrer wurden in dieser Woche keine Stunden gefunden.</p>'
 
     dates = list(week_plans.keys())
@@ -339,6 +340,7 @@ def render_teacher_week_table(
         today = date.today()
         head_class = ' class="day-head--today"' if today.weekday() < 5 and plan_date == today else ""
         day_plan = week_plans[plan_date]
+        day_status = '<small class="day-free-label">Unterrichtsfrei</small>' if getattr(day_plan, "unterrichtsfrei", False) else ""
         timestamp = getattr(day_plan, "zeitstempel", None)
         if timestamp is not None:
             timestamp_text = timestamp.strftime("%d.%m.%Y %H:%M")
@@ -353,6 +355,7 @@ def render_teacher_week_table(
                 <div class="day-head-marker">
                     <span>{escape(day_name)}</span>
                     <small>{plan_date.strftime("%d.%m.")}</small>
+                    {day_status}
                     {day_plan_info}
                 </div>
             </th>
@@ -432,7 +435,7 @@ def get_week_version(week_plans: dict[date, object | None]) -> str:
     """Erzeugt eine kurze Version aus den Zeitstempeln der Wochenpläne."""
 
     return "|".join(
-        f"{plan_date.isoformat()}:{'vorhanden' if plan is not None else 'fehlend'}:{getattr(plan, 'zeitstempel', '') or ''}"
+        f"{plan_date.isoformat()}:{'frei' if getattr(plan, 'unterrichtsfrei', False) else 'vorhanden' if plan is not None else 'fehlend'}:{getattr(plan, 'zeitstempel', '') or ''}"
         for plan_date, plan in week_plans.items()
     )
 
@@ -704,6 +707,10 @@ def render_teacher_page(
             font-weight: 700;
             max-width: 100%;
             overflow-wrap: anywhere;
+        }}
+
+        .week-table thead .day-free-label {{
+            color: var(--primary);
         }}
 
         .period-head {{

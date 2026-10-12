@@ -354,6 +354,39 @@ def get_subject_catalog_plans_for_page() -> list[object]:
     return cached
 
 
+def get_known_free_school_dates() -> set[date] | None:
+    """Liefert bekannte unterrichtsfreie Datumswerte aus VpMobils Planindex."""
+    with _subject_catalog_lock:
+        catalog_plans = list(_subject_catalog_cache or [])
+    with _page_cache_lock:
+        page_plans = list(_page_plan_cache.values())
+    free_dates: set[date] = set()
+    has_authoritative_calendar = False
+    for plan in (*catalog_plans, *page_plans):
+        if plan is None:
+            continue
+        has_authoritative_calendar = has_authoritative_calendar or hasattr(plan, "freieTage")
+        free_dates.update(
+            day for day in getattr(plan, "freieTage", ()) if isinstance(day, date)
+        )
+    return free_dates if has_authoritative_calendar else None
+
+
+def _free_day_plan(plan_date: date, source_plan=None):
+    """Einheitlicher leerer Tagesplan, damit Ferien/Feiertage nicht als Normalplan erscheinen."""
+    return SimpleNamespace(
+        datum=plan_date,
+        zeitstempel=getattr(source_plan, "zeitstempel", None),
+        zeitplan=getattr(source_plan, "zeitplan", {}),
+        klassen={},
+        lehrer={},
+        räume={},
+        freieTage=list(getattr(source_plan, "freieTage", ())),
+        zusatzinfo=getattr(source_plan, "zusatzinfo", None),
+        unterrichtsfrei=True,
+    )
+
+
 def fetch_official_weekly_plans(start_date: date | None = None) -> dict[date, object]:
     """Fetch the original Stundenplan24 weekly plan, including A/B weeks."""
 
@@ -613,6 +646,10 @@ def warm_page_caches_from_disk(anchor_date: date | None = None) -> int:
 def get_week_plans_for_page(selected_date: date) -> dict[date, object | None]:
     """Lädt Tagespläne cache-first und ergänzt fehlende Tage mit dem Wochenplan."""
 
+    # Der Standardplan enthält die schulweiten Ferien- und Feiertagsdaten.
+    # Seine Aktualisierung bleibt cache-first und läuft bei Bedarf im Hintergrund.
+    get_subject_catalog_plans_for_page()
+
     week_plans = {}
     for plan_date in get_school_week_dates(selected_date):
         with _page_cache_lock:
@@ -639,6 +676,11 @@ def get_week_plans_for_page(selected_date: date) -> dict[date, object | None]:
         for plan_date, official_plan in official_week.items():
             if week_plans.get(plan_date) is None:
                 week_plans[plan_date] = official_plan
+
+    free_dates = get_known_free_school_dates() or set()
+    for plan_date, day_plan in list(week_plans.items()):
+        if plan_date in free_dates or plan_date in getattr(day_plan, "freieTage", ()):
+            week_plans[plan_date] = _free_day_plan(plan_date, day_plan)
 
     # Tagespläne werden unabhängig davon im Hintergrund aktualisiert. Dadurch
     # ersetzt ein später eintreffender Vertretungsplan weiter den Normalplan.

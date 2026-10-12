@@ -608,16 +608,23 @@ class SubscriptionNotifier:
         *,
         recipient_username: str | None = None,
         day_before_plan: object | None = None,
+        free_dates: set[date] | None = None,
+        school_week_status: bool | None = True,
+        summary_school_week_status: bool | None = True,
     ) -> int:
         self.delivery_errors.clear()
         poll_started = monotonic()
         now = now or datetime.now()
         emit("ntfy.poll", level=logging.DEBUG, local_now=now.isoformat(), plan_date=str(getattr(plan, "datum", None)))
         plan_date = getattr(plan, "datum", None) or now.date()
+        plan_is_free = (school_week_status is False or bool(getattr(plan, "unterrichtsfrei", False))
+                        or plan_date in (free_dates or set()))
+        plan_free_status_known = (school_week_status is not None
+                                  and (free_dates is not None or hasattr(plan, "freieTage")))
         known_signatures = self._known_plan_signatures.setdefault(plan_date, {})
         previous_signatures = dict(known_signatures)
         changed_classes: set[str] = set()
-        for class_name, class_item in getattr(plan, "klassen", {}).items():
+        for class_name, class_item in (() if plan_is_free else getattr(plan, "klassen", {}).items()):
             signature = self._plan_signature(class_item)
             previous_signature = known_signatures.get(class_name)
             if previous_signature is not None and previous_signature != signature:
@@ -650,7 +657,12 @@ class SubscriptionNotifier:
                 summary_time = self._time_from_text(summary_time_text)
                 summary_plan = day_before_plan if settings.daily_summary_day_before else plan
                 summary_date = getattr(summary_plan, "datum", None) or plan_date
-                summary_due = now.time() >= summary_time and summary_date.weekday() < 5
+                summary_is_free = (summary_school_week_status is False
+                                   or bool(getattr(summary_plan, "unterrichtsfrei", False))
+                                   or summary_date in (free_dates or set()))
+                summary_status_known = (summary_school_week_status is not None
+                                        and (free_dates is not None or hasattr(summary_plan, "freieTage")))
+                summary_due = now.time() >= summary_time and summary_date.weekday() < 5 and summary_status_known and not summary_is_free
                 if summary_due:
                     for target_type, target in lesson_targets:
                         lines = self._daily_summary_lines_for_target(recipient, summary_plan, target_type, target)
@@ -662,9 +674,12 @@ class SubscriptionNotifier:
                                 ("Morgen, " if settings.daily_summary_day_before else "Heute, ") + summary_date.strftime("%d.%m.%Y") + ":\n" + "\n".join(lines),
                                 f"(VPrintfy) {target_label} · " + ("Morgen" if settings.daily_summary_day_before else "Heute"),
                             )
+                # If the date calendar is not available yet, do not risk a false
+                # timetable notification. Calendar-event notifications below are independent.
+                timetable_targets = lesson_targets if plan_free_status_known and not plan_is_free else []
                 timestamp = getattr(plan, "zeitstempel", None)
                 if timestamp:
-                    for target_type, target in lesson_targets:
+                    for target_type, target in timetable_targets:
                         if target_type == "class" and target not in changed_classes:
                             continue
                         changes = self._change_lines_for_target(recipient, plan, target_type, target)
@@ -702,7 +717,7 @@ class SubscriptionNotifier:
                             # verfügbar war) - lieber auslassen als eine sehr
                             # verspätete Benachrichtigung zu versenden.
                             continue
-                        for target_type, target in lesson_targets:
+                        for target_type, target in timetable_targets:
                             notification = self._next_block_notification_for_target(recipient, plan, trigger_time, target_type, target)
                             if notification is None:
                                 continue

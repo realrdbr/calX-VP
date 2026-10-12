@@ -28,7 +28,8 @@ from rooms_page import describe_room_plan, get_room_plan_for_page, get_free_room
 from subscriptions import SubscriptionNotifier, available_class_names_from_plans, available_teacher_names_from_plans, subject_key, subject_options_from_plans
 from teacher_page import render_teacher_page
 from room_schedule_page import render_room_schedule_page
-from vp_data import ResourceNotFound, Unauthorized, get_cached_plan_for_page, get_plan_for_page, get_subject_catalog_plans, get_subject_catalog_plans_for_page, log, warm_page_caches_from_disk
+from school_calendar import is_instructional_week, refresh_school_weeks
+from vp_data import ResourceNotFound, Unauthorized, get_cached_plan_for_page, get_known_free_school_dates, get_plan_for_page, get_subject_catalog_plans, get_subject_catalog_plans_for_page, log, warm_page_caches_from_disk
 from web_utils import cookie_values, format_week_value, join_cookie_list, make_cookie, parse_cookie_header, parse_hour, parse_week, query_value, query_values, redirect, send_html, split_cookie_list
 
 
@@ -182,6 +183,18 @@ class NotificationWorker(Thread):
              internal_endpoint=endpoint(self.notifier.ntfy_url),
              public_endpoint=endpoint(os.getenv("NTFY_PUBLIC_URL", "")),
              behind_proxy=os.getenv("NTFY_BEHIND_PROXY", "false"))
+        # Use the same published school-week index as the plan pages. Weeks that
+        # Stundenplan24 omits for vacations must not produce timetable pushes.
+        # Individual VpMobil free dates are checked as an additional signal.
+        try:
+            import vp_data
+            refresh_school_weeks(
+                vp_data.SCHULNUMMER, vp_data.BENUTZERNAME, vp_data.PASSWORT,
+                vp_data.CACHE_DIR, background=True,
+            )
+            get_subject_catalog_plans()
+        except Exception as error:
+            log(f"Freie Tage konnten für Benachrichtigungen nicht vorab geladen werden: {error}")
         while not self.stop_event.is_set():
             started = time.monotonic()
             try:
@@ -199,13 +212,27 @@ class NotificationWorker(Thread):
                 next_days = 3 if today.weekday() == 4 else (2 if today.weekday() == 5 else 1)
                 plan = self._load_plan_for_worker(today)
                 next_plan = self._load_plan_for_worker(today + timedelta(days=next_days))
+                free_dates = get_known_free_school_dates()
+                next_plan_date = today + timedelta(days=next_days)
+                school_week_status = is_instructional_week(today)
+                summary_school_week_status = is_instructional_week(next_plan_date)
                 local_now = datetime.now(zone).replace(tzinfo=None)
-                sent = self.notifier.poll_once(plan, local_now, day_before_plan=next_plan)
+                sent = self.notifier.poll_once(
+                    plan,
+                    local_now,
+                    day_before_plan=next_plan,
+                    free_dates=free_dates,
+                    school_week_status=school_week_status,
+                    summary_school_week_status=summary_school_week_status,
+                )
                 if started >= heartbeat_at:
                     emit("ntfy.worker_heartbeat", local_now=local_now.isoformat(),
                          plan_date=str(getattr(plan, "datum", None)),
                          plan_classes=len(getattr(plan, "klassen", {})),
                          plan_updated=str(getattr(plan, "zeitstempel", None)),
+                         free_dates_known=free_dates is not None,
+                         school_week_known=school_week_status is not None,
+                         instructional_week=school_week_status,
                          sent=sent, failed=len(self.notifier.delivery_errors))
                     heartbeat_at = started + 900
                 if sent:

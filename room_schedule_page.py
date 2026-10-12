@@ -52,7 +52,8 @@ def room_table_plans(week):
         # lesson's teachers, classes and rooms remain intact for the detail popup.
         result[day] = SimpleNamespace(lehrer=rooms, zeitstempel=getattr(plan, 'zeitstempel', None),
                                      zusatzinfo=getattr(plan, 'zusatzinfo', None),
-                                     zeitplan=getattr(plan, 'zeitplan', {}))
+                                     zeitplan=getattr(plan, 'zeitplan', {}),
+                                     unterrichtsfrei=getattr(plan, 'unterrichtsfrei', False))
     return result
 
 

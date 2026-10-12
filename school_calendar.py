@@ -129,3 +129,13 @@ def adjacent_school_week(value, direction=1):
         return monday + timedelta(days=7 * direction)
     candidates = [week for week in _weeks if (week > monday if direction > 0 else week < monday)]
     return (candidates[0] if direction > 0 else candidates[-1]) if candidates else school_week(monday)
+
+
+def is_instructional_week(value):
+    """Return whether Stundenplan24 publishes this school week, or None if unknown."""
+    monday = value - timedelta(days=value.weekday())
+    with _lock:
+        weeks = _weeks
+    if not weeks:
+        return None
+    return monday in weeks
