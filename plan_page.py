@@ -13,7 +13,7 @@ from vp_data import (
     get_subject_catalog_plans_for_page,
     get_week_plans_for_page,
 )
-from subscriptions import lesson_display_label, subject_options_from_plans
+from subscriptions import lesson_display_label, lesson_subject, subject_key, subject_options_from_plans
 from web_utils import (
     CALENDAR_PUBLIC_URL,
     COMMON_CSS,
@@ -185,7 +185,24 @@ def lesson_matches_subject_filter(lesson, selected_subjects: list[str], class_it
     course = getattr(class_item, "kurse", {}).get(getattr(lesson, "kursnummer", None))
     if is_cancelled(lesson) and not has_value(lesson.fach) and course is None:
         return True
-    return get_lesson_subject_label(lesson, class_item) in selected_subjects
+
+    # Die Checkbox zeigt Fach und Lehrerkürzel an. Bei einer eingeschobenen
+    # Stunde kann VpMobil denselben Kurs mit abweichender/fehlender Lehrkraft
+    # liefern. Deshalb zuerst weiter den sichtbaren Namen prüfen, dann über den
+    # stabilen Kurs-/Fachcode vergleichen.
+    if get_lesson_subject_label(lesson, class_item) in selected_subjects:
+        return True
+
+    selected_keys = set()
+    for label in selected_subjects:
+        subject = label
+        if label.endswith(")") and " (" in label:
+            subject = label.rsplit(" (", 1)[0]
+        key = subject_key(subject)
+        if key:
+            selected_keys.add(key)
+    lesson_key = subject_key(lesson_subject(class_item, lesson)) if class_item is not None else None
+    return lesson_key in selected_keys if lesson_key else False
 
 
 def collect_week_lessons(
